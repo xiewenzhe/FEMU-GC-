@@ -1,0 +1,576 @@
+#include "ftl.h"
+#include "ftl-internal.h"
+
+//#define FEMU_DEBUG_FTL
+
+
+
+
+
+
+void ssd_init(FemuCtrl *n, NvmeNamespace *ns)
+{
+    struct ssd *ssd = ns->ssd;
+    struct ssdparams *spp = &ssd->sp;
+
+    ftl_assert(ssd);
+    ssd->n = n;
+
+    /* read the data-remanence experiment env vars once (debug only, off by default) */
+    exp_load_cfg();
+
+    ssd_init_params(spp, n);
+
+    /* initialize ssd internal layout architecture */
+    ssd->ch = g_malloc0(sizeof(struct ssd_channel) * spp->nchs);
+    for (int i = 0; i < spp->nchs; i++) {
+        ssd_init_ch(&ssd->ch[i], spp);
+    }
+
+    /*
+     * Validate the optional NAND cell type before the media layer or the datapath
+     * indexes the per-type tables with it. Only SLC..QLC have populated tables and
+     * page-type pairing; anything else (including PLC) falls back to flat timing.
+     */
+    if (n->nand_cell_type &&
+        (n->nand_cell_type < SLC || n->nand_cell_type > QLC)) {
+        ftl_err("nand_cell_type %u out of range (1 SLC..4 QLC); using flat timing\n",
+                n->nand_cell_type);
+        n->nand_cell_type = 0;
+    }
+    /*
+     * The pgtype_lat program model needs a bits-per-cell count to pick a
+     * multiplier row and to fold the page number into a page type; default it to
+     * TLC when the model is on but cell_pages was left unset, so the page type
+     * and the multiplier row stay consistent.
+     */
+    if (spp->pgtype_lat && spp->cell_pages < 1) {
+        spp->cell_pages = 3; /* TLC */
+    }
+
+    /* factory bad-block count, reported via SMART available_spare; clamp to the
+     * total block count so a misconfigured value cannot exceed 100% depletion */
+    ssd->debug_ftl = n->debug_ftl;
+
+    /*
+     * Turn a parts-per-million rate into a 1-in-N period, clamped so a non-zero
+     * rate always injects something. Zero leaves injection off.
+     */
+    ssd->err_read_unc_period = 0;
+    ssd->err_read_counter = 0;
+    ssd->err_read_injected = 0;
+    if (n->err_read_unc_ppm) {
+        ssd->err_read_unc_period = 1000000u / n->err_read_unc_ppm;
+        if (ssd->err_read_unc_period < 1) {
+            ssd->err_read_unc_period = 1;
+        }
+    }
+    ssd->err_write_fail_period = 0;
+    ssd->err_write_counter = 0;
+    ssd->err_write_injected = 0;
+    if (n->err_write_fail_ppm) {
+        ssd->err_write_fail_period = 1000000u / n->err_write_fail_ppm;
+        if (ssd->err_write_fail_period < 1) {
+            ssd->err_write_fail_period = 1;
+        }
+    }
+    ssd->host_write_pages = 0;
+    ssd->nand_write_pages = 0;
+    ssd->gc_write_pages = 0;
+
+    ssd->bad_blocks = n->nand_bad_blocks;
+    if (spp->tt_blks > 0 && ssd->bad_blocks > (uint32_t)spp->tt_blks) {
+        ssd->bad_blocks = (uint32_t)spp->tt_blks;
+    }
+
+    /*
+     * An explicit rating wins; otherwise take the one the cell type implies.
+     * A device configured with neither keeps zero and reports no life estimate.
+     */
+    ssd->total_erases = 0;
+    ssd->rated_pe_cycles = n->pe_cycles_rated ? n->pe_cycles_rated :
+                           get_rated_pe_cycles(n->nand_cell_type);
+
+    /* configure the NAND media-layer timing (reads spp, points at ssd->ch) */
+    bb_nand_media_init(ssd);
+
+    /* initialize maptbl */
+    ssd_init_maptbl(ssd);
+
+    /* initialize rmap */
+    ssd_init_rmap(ssd);
+
+    /* initialize all the lines */
+    ssd_init_lines(ssd);
+
+    /* resolve the base-path GC victim policy (greedy by default) */
+    ssd->policy = femu_ftl_policy_lookup(n->bb_params.gc_policy);
+
+    /*
+     * L2P mapping scheme: "page" (default, full DRAM L2P, bit-identical) vs "dftl"
+     * (demand-cached L2P via the CMT). The CMT turns on when dftl is named or
+     * mapping_cache_mb is set; a named dftl with no explicit size gets 4 MB.
+     */
+    ssd->mapping = femu_mapping_scheme_lookup(n->bb_params.mapping_scheme);
+    /* schemes that keep private state allocate it here; page/dftl keep it NULL */
+    ssd->map_priv = NULL;
+    if (ssd->mapping->init) {
+        ssd->mapping->init(ssd);
+    }
+    uint32_t map_cache_mb = n->mapping_cache_mb;
+    if (femu_mapping_scheme_uses_cmt(ssd->mapping) && map_cache_mb == 0) {
+        map_cache_mb = 4; /* default dftl cache when no explicit size given */
+    }
+    /* the CMT is a dftl-only cost model: never charge it under the page scheme,
+     * even if mapping_cache_mb was set */
+    cmt_init(ssd, femu_mapping_scheme_uses_cmt(ssd->mapping) ? map_cache_mb : 0);
+
+    /*
+     * Optional DRAM read cache (opt-in via read_cache_mb; 0 = off, bit-identical
+     * default). cache_evict selects the eviction policy.
+     */
+    uint32_t rc_evict = 0; /* 0 = CLOCK (default) */
+    if (n->bb_params.cache_evict) {
+        if (!strcmp(n->bb_params.cache_evict, "random")) {
+            rc_evict = 1;
+        } else if (!strcmp(n->bb_params.cache_evict, "lru")) {
+            rc_evict = 2;
+        } else if (!strcmp(n->bb_params.cache_evict, "arc")) {
+            rc_evict = 3; /* scan-resistant 2Q-style */
+        }
+    }
+    rcache_init(ssd, n->read_cache_mb, rc_evict);
+
+    /* FDP vs non-FDP init path */
+    ssd->fdp_enabled = (n->subsys != NULL &&
+                        n->subsys->params.fdp.enabled);
+    ssd->fdp_debug = (getenv("FEMU_FDP_DEBUG") != NULL);
+
+    if (ssd->fdp_enabled) {
+        ssd_init_fdp_params(spp, n);
+
+        ftl_log("FDP: initializing reclaim groups\n");
+        femu_fdp_ssd_init_reclaim_group(n, ssd);
+        ftl_log("FDP: initializing RU handles\n");
+        femu_fdp_ssd_init_ru_handles(n, ssd);
+        ftl_log("FDP: init complete (nrg=%lu, nruhs=%lu)\n",
+                ssd->nrg, ssd->nruhs);
+    } else {
+        /* non-FDP: use single write pointer */
+        ssd_init_write_pointer(ssd);
+    }
+}
+
+/*
+ * Write-amplification factor scaled by 1000, so it needs no floating point on
+ * the read path: pages written to NAND over pages the host wrote. Reads 1000
+ * (a factor of 1.0) before the host has written anything.
+ *
+ * The denominator is what the host wrote, not what reached the media, so a
+ * write buffer that absorbs repeated writes to the same page shows up as the
+ * reduction in amplification that it is. With no buffer configured the two are
+ * equal and this is the same ratio it has always been.
+ */
+uint32_t ssd_waf_x1000(struct ssd *ssd)
+{
+    uint64_t host = ssd->host_write_pages;
+    uint64_t total = ssd->nand_write_pages + ssd->gc_write_pages;
+
+    if (host == 0) {
+        return 1000;
+    }
+
+    return (uint32_t)((total * 1000ull) / host);
+}
+
+/* struct ssd is opaque outside the FTL, so the raw counters need accessors */
+uint64_t ssd_host_write_pages(struct ssd *ssd)
+{
+    return ssd->host_write_pages;
+}
+
+uint64_t ssd_gc_write_pages(struct ssd *ssd)
+{
+    return ssd->gc_write_pages;
+}
+
+uint64_t ssd_nand_write_pages(struct ssd *ssd)
+{
+    return ssd->nand_write_pages;
+}
+
+/* Lines rewritten because a block of theirs passed the read stress limit. */
+/*
+ * Copy: read every source range, then program the destination as one write.
+ * The write cannot start before its data has been read, so the latency is the
+ * slowest read plus the write.
+ */
+static uint64_t ssd_copy(FemuCtrl *n, struct ssd *ssd, NvmeRequest *req)
+{
+    uint64_t dslba = req->slba;
+    uint32_t dnlb = req->nlb;
+    uint64_t rlat = 0;
+    uint64_t wlat;
+
+    NvmeNamespace *dns = req->ns;
+
+    for (int i = 0; i < req->dsm_nr_ranges; i++) {
+        uint32_t snsid = le32_to_cpu(req->dsm_ranges[i].cattr);
+        struct ssd *from = ssd;
+        uint64_t lat;
+
+        /*
+         * A range from another namespace is read from that one's media, at
+         * that one's place in the backing store, which is what the request's
+         * namespace stands for while the read is charged.
+         */
+        if (snsid && snsid != dns->id) {
+            NvmeNamespace *source = nvme_ns(n, snsid);
+
+            /* a namespace without media (no-SSD) costs nothing to read */
+            if (!source || !source->ssd) {
+                continue;
+            }
+            from = source->ssd;
+            req->ns = source;
+        }
+        req->slba = le64_to_cpu(req->dsm_ranges[i].slba);
+        req->nlb = le32_to_cpu(req->dsm_ranges[i].nlb);
+        lat = ssd_read(from, req);
+        req->ns = dns;
+        rlat = MAX(rlat, lat);
+    }
+    req->slba = dslba;
+    req->nlb = dnlb;
+    if (ssd->fdp_enabled) {
+        wlat = nvme_do_write_fdp(n, req, dslba, dnlb);
+    } else {
+        wlat = ssd_write(ssd, req);
+    }
+
+    return rlat + wlat;
+}
+
+uint64_t ssd_read_reclaims(struct ssd *ssd)
+{
+    return ssd->read_reclaims;
+}
+
+/* Bytes in one NAND page, for counters the host wants in bytes. */
+uint32_t ssd_page_size(struct ssd *ssd)
+{
+    return (uint32_t)ssd->sp.secs_per_pg * (uint32_t)ssd->sp.secsz;
+}
+
+/*
+ * Media and data integrity errors, as SMART counts them: the reads and writes
+ * the device failed and reported to the host. Only fault insertion produces
+ * them, so a device with none configured reports none.
+ */
+uint64_t ssd_media_errors(struct ssd *ssd)
+{
+    return ssd->err_read_injected + ssd->err_write_injected;
+}
+
+/* Lines rewritten because their data had sat programmed past the retention limit. */
+uint64_t ssd_retention_refreshes(struct ssd *ssd)
+{
+    return ssd->retention_refreshes;
+}
+
+/*
+ * Write buffer effectiveness. The hit counts are the pages the buffer answered
+ * without touching the media: a read it still held, and a write that superseded
+ * a page it already held and so owed no extra program. Reported against the
+ * host totals so the ratio is computable, since the buffer is only configured
+ * on some devices and a zero denominator means it was never exercised.
+ */
+uint64_t ssd_buffer_reads(struct ssd *ssd)
+{
+    return ssd->sp.read_cnt;
+}
+
+uint64_t ssd_buffer_read_hits(struct ssd *ssd)
+{
+    return ssd->sp.read_hit_cnt;
+}
+
+uint64_t ssd_buffer_writes(struct ssd *ssd)
+{
+    return ssd->sp.write_cnt;
+}
+
+uint64_t ssd_buffer_write_hits(struct ssd *ssd)
+{
+    return ssd->sp.write_hit_cnt;
+}
+
+/*
+ * The most-read block since its last erase. A device rewrites data before read
+ * stress accumulates far enough to cost it; this is the number that decision
+ * would be made on.
+ */
+uint64_t ssd_max_block_reads(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t most = 0;
+    int ch, lun, pl, blk;
+
+    for (ch = 0; ch < spp->nchs; ch++) {
+        for (lun = 0; lun < spp->luns_per_ch; lun++) {
+            for (pl = 0; pl < spp->pls_per_lun; pl++) {
+                struct nand_plane *plane = &ssd->ch[ch].lun[lun].pl[pl];
+
+                for (blk = 0; blk < spp->blks_per_pl; blk++) {
+                    if (plane->blk[blk].read_cnt > most) {
+                        most = plane->blk[blk].read_cnt;
+                    }
+                }
+            }
+        }
+    }
+
+    return most;
+}
+
+/*
+ * SMART available_spare: 100% on a healthy device, reduced by the factory
+ * bad-block fraction (bad_blocks / tt_blks) as bad blocks consume the
+ * over-provisioned reserve. A reported value only -- placement is unaffected.
+ */
+/*
+ * SMART percentage_used: the average program/erase cycles a block has taken,
+ * as a percentage of what the media is rated for. The specification allows
+ * values above 100 and caps the reported figure at 255. Zero when the device
+ * was given no endurance rating, which means no estimate rather than a new
+ * device -- a new device also reports zero, and the two are indistinguishable
+ * in this field by design.
+ */
+uint8_t ssd_percentage_used(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t denom, pct;
+
+    if (!ssd->rated_pe_cycles || spp->tt_blks <= 0) {
+        return 0;
+    }
+    /*
+     * Divide once. Taking the average first threw the fraction away, so a
+     * device half way through its first cycle across every block -- a third
+     * of a ten-cycle rating, say -- still reported nothing used.
+     */
+    denom = (uint64_t)spp->tt_blks * ssd->rated_pe_cycles;
+    pct = (ssd->total_erases * 100ull) / denom;
+
+    return pct > 255 ? 255 : (uint8_t)pct;
+}
+
+uint8_t ssd_available_spare(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+    uint64_t bad_pct;
+
+    if (ssd->bad_blocks == 0 || spp->tt_blks <= 0) {
+        return 100;
+    }
+    bad_pct = ((uint64_t)ssd->bad_blocks * 100ull) / (uint64_t)spp->tt_blks;
+    return bad_pct >= 100 ? 0 : (uint8_t)(100 - bad_pct);
+}
+
+
+
+/*
+ * ssd_advance_status now lives in the NAND media-layer bridge
+ * (hw/femu/bbssd/ftl-media.c), which runs the same flat per-LUN read/program/
+ * erase timing through the uniform nand_media API.
+ */
+
+
+
+
+/*
+ * Run one request against this namespace's bbssd FTL and return the latency to
+ * charge it. The controller's FTL thread calls this once it has picked out the
+ * namespace, so one controller can serve namespaces of different modes.
+ */
+uint64_t bb_ftl_process_req(FemuCtrl *n, NvmeNamespace *ns, NvmeRequest *req)
+{
+    struct ssd *ssd = ns->ssd;
+    uint64_t lat = 0;
+
+    if (!ssd) {
+        return 0;
+    }
+
+    /*
+     * A request that already failed validation in the I/O layer is only routed
+     * through the FTL ring so the poller completes it with its carried error
+     * status. It must not run any opcode handler: req->slba and req->nlb may be
+     * stale (the I/O layer returns before setting them) and ssd_read/ssd_write
+     * would then touch unrelated mapping state and overwrite the error. Leave
+     * latency at zero and let the poller post the carried status.
+     */
+    if (req->status != NVME_SUCCESS) {
+        return 0;
+    }
+
+    if (n->streams) {
+        qemu_mutex_lock(&n->streams_lock);
+    }
+    switch (req->cmd.opcode) {
+    case NVME_CMD_FLUSH:
+        /*
+         * Commit what the write buffer is holding. The buffer is the only state
+         * a bbssd namespace keeps back from the media, so a flush is a full
+         * write-back of it, and the cost of programming those pages is charged
+         * here -- which is where a real device charges it too.
+         *
+         * Handled here rather than in the I/O layer because the buffer, the
+         * mapping and the line management belong to this thread; draining them
+         * from the poller would race everything else the FTL is doing. The
+         * request reaches the FTL ring like any other, so no extra plumbing is
+         * needed to get here.
+         *
+         * What this guarantees: a completion is only posted after the FTL has
+         * processed the request, so every write the host has seen complete is
+         * already in the buffer by the time a later flush is dequeued, and the
+         * write-back covers it. That is what the NVM Command Set asks of Flush.
+         * It says nothing about writes still in flight on another poller ring,
+         * which the host has not been told are complete and which the FTL
+         * thread may not have reached yet -- those are unordered against this
+         * flush, as they are against each other.
+         *
+         * Drained whether or not the cache is currently advertised or enabled:
+         * if pages are being held back, a flush has to write them out. Doing
+         * this only for an enabled cache would let the host disable the cache
+         * and then be told a flush succeeded with pages still buffered.
+         */
+        lat = ssd_buffer_destage(ssd, 0, req->stime);
+        if (n->power_loss && ssd->write_buffer_cnt) {
+            req->status = NVME_CAP_EXCEEDED | NVME_DNR;
+        }
+        break;
+    case NVME_CMD_WRITE_ZEROES:
+        /* FDP keeps its own reclaim-unit accounting and needs its own path */
+        if (ssd->fdp_enabled) {
+            lat = ssd_write_zeroes_fdp_style(n, req);
+        } else {
+            lat = ssd_write_zeroes(ssd, req);
+        }
+        break;
+    case NVME_CMD_WRITE:
+        if (ssd->fdp_enabled) {
+            lat = nvme_do_write_fdp(n, req, req->slba, req->nlb);
+        } else {
+            lat = ssd_write(ssd, req);
+        }
+        /* optional write fault on every Nth write, on the same principle */
+        if (ssd->err_write_fail_period &&
+            (++ssd->err_write_counter % ssd->err_write_fail_period) == 0) {
+            req->status = NVME_WRITE_FAULT;
+            ssd->err_write_injected++;
+        }
+        break;
+    case NVME_CMD_COPY:
+        lat = ssd_copy(n, ssd, req);
+        break;
+    case NVME_CMD_READ:
+        lat = ssd_read(ssd, req);
+        /*
+         * Optional media error on every Nth read. The counter makes a run
+         * reproducible, unlike a random draw.
+         */
+        if (ssd->err_read_unc_period &&
+            (++ssd->err_read_counter % ssd->err_read_unc_period) == 0) {
+            req->status = NVME_UNRECOVERED_READ | NVME_DNR;
+            ssd->err_read_injected++;
+        }
+        break;
+    case NVME_CMD_IO_MGMT_SEND:
+        if (ssd->fdp_enabled && req->fdp_pids) {
+            ssd_fdp_update_ruhs(n, req);
+        }
+        break;
+    case NVME_CMD_DSM:
+        if (ssd->fdp_enabled) {
+            ssd_trim_fdp_style(n, req, req->slba, req->nlb);
+            lat = 0;
+        } else if (req->dsm_ranges && req->dsm_nr_ranges > 0) {
+            lat = ssd_trim(ssd, req);
+        }
+        break;
+    default:
+        ;
+    }
+
+    /* background GC */
+    if (ssd->fdp_enabled) {
+        int16_t rgidx;
+        /*
+         * Trigger a single GC pass on a reclaim group over threshold; the GC
+         * policy itself lives in do_gc_fdp_style(), not here.
+         */
+        if (!((rgidx = should_gc_fdp_style(ssd)) < 0)) {
+            if (ssd->nrg == 1) {
+                do_gc_fdp_style(ssd, 0, 0, false);
+            } else {
+                do_gc_fdp_style(ssd, rgidx, 0, false);
+            }
+        }
+    } else if (should_gc(ssd)) {
+        do_gc(ssd, false);
+    }
+
+    if (n->streams) {
+        qemu_mutex_unlock(&n->streams_lock);
+    }
+    return lat;
+}
+
+/*
+ * ssd_free - release everything ssd_init() built, in the reverse order
+ *
+ * Every mode that allocates an ns->ssd runs it through ssd_init(), so one
+ * teardown serves bbssd, CSD and KV. The struct itself belongs to whichever
+ * mode allocated it, and that mode frees it after calling this.
+ */
+void ssd_free(struct ssd *ssd)
+{
+    struct ssdparams *spp;
+    int i;
+
+    if (!ssd) {
+        return;
+    }
+    spp = &ssd->sp;
+
+    /*
+     * Guarded on the pointers rather than fdp_enabled: KV builds the same
+     * structures without setting the flag, and freeing nothing is cheap.
+     */
+    femu_fdp_ssd_free(ssd);
+
+    if (ssd->mapping && ssd->mapping->exit) {
+        ssd->mapping->exit(ssd);
+    }
+
+    rcache_destroy(ssd);
+    cmt_destroy(ssd);
+    ssd_free_lines(ssd);
+    ssd_free_write_buffer(ssd);
+
+    g_free(ssd->rmap);
+    ssd->rmap = NULL;
+    g_free(ssd->maptbl);
+    ssd->maptbl = NULL;
+
+    nand_media_destroy(&ssd->media);
+
+    if (ssd->ch) {
+        for (i = 0; i < spp->nchs; i++) {
+            ssd_free_ch(&ssd->ch[i], spp);
+        }
+        g_free(ssd->ch);
+        ssd->ch = NULL;
+    }
+}

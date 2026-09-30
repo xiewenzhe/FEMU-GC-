@@ -1,0 +1,25 @@
+system_ss.add(when: 'CONFIG_FEMU_PCI',
+              if_true: files('dma.c', 'intr.c', 'nvme-util.c',
+                             'nvme-admin.c', 'nvme-io.c', 'nvme-pi.c',
+                             'nvme-pel.c', 'nvme-streams.c', 'femu.c',
+                             'nossd/nop.c', 'nand/nand.c',
+                             'nand/nand-media.c',
+                             'timing-model/timing.c', 'ocssd/oc12.c',
+                             'ocssd/oc20.c', 'zns/zns.c', 'zns/zftl.c',
+                             'bbssd/bb.c', 'bbssd/ftl.c', 'bbssd/ftl-media.c',
+                             'bbssd/ftl-geom.c', 'bbssd/ftl-map.c',
+                             'bbssd/ftl-line-gc.c', 'bbssd/ftl-exp.c',
+                             'bbssd/ftl-datapath.c', 'bbssd/ftl-fdp.c',
+                             'bbssd/ftl-cache.c', 'bbssd/ftl-map-cmt.c',
+                             'bbssd/ftl-map-hybrid.c', 'bbssd/ftl-map-fast.c',
+                             'kvssd/kvssd.c', 'kvssd/kvssd-ftl.c',
+                             'kvssd/kvssd-admin.c',
+                             'csd/csd.c',
+                             'lib/pqueue.c', 'lib/rte_ring.c',
+                             'backend/dram.c'))
+system_ss.add(when: 'CONFIG_FEMU_CSD_UBPF', if_true: femu_csd_ubpf)
+system_ss.add(when: ['CONFIG_FEMU_PCI', 'CONFIG_CXL_MEM_DEVICE'],
+              if_true: files('cxlssd/cxlssd.c', 'cxlssd/cache.c',
+                             'cxlssd/cca.c', 'cxlssd/cca-ring.c'))
+specific_ss.add(when: ['CONFIG_FEMU_PCI', 'CONFIG_CXL_MEM_DEVICE'],
+                if_true: files('cxlssd/qemu-adapter.c'))
