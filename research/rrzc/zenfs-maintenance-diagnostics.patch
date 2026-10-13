@@ -1,0 +1,271 @@
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -18,6 +18,7 @@
+ 
+ #include <atomic>
+ #include <condition_variable>
++#include <map>
+ #include <mutex>
+ #include <sstream>
+ #include <string>
+@@ -51,6 +52,15 @@
+ class ZoneSnapshot;
+ class ZenFSSnapshotOptions;
+ 
++// 仅描述当前进程观察到的主机 Reset；不持久化，也不等于设备擦除次数。
++struct ZoneResetState {
++  uint64_t start = 0;
++  uint64_t generation = 0;
++  uint64_t sequence = 0;
++  bool stable = false;
++  bool known = false;
++};
++
+ class ZoneList {
+  private:
+   void *data_;
+@@ -68,6 +78,10 @@
+   ZonedBlockDevice *zbd_;
+   ZonedBlockDeviceBackend *zbd_be_;
+   std::atomic_bool busy_;
++  std::atomic<uint64_t> reset_generation_{0};
++  // 奇数表示 Reset 调用尚未结束；失败也推进序号，避免漏掉可能的介质变化。
++  std::atomic<uint64_t> reset_sequence_{0};
++  std::atomic<bool> reset_generation_known_{true};
+ 
+  public:
+   explicit Zone(ZonedBlockDevice *zbd, ZonedBlockDeviceBackend *zbd_be,
+@@ -81,6 +95,7 @@
+   std::atomic<uint64_t> used_capacity_;
+ 
+   IOStatus Reset();
++  ZoneResetState GetResetState() const;
+   IOStatus Finish();
+   IOStatus Close();
+ 
+@@ -186,6 +201,7 @@
+ 
+   std::shared_ptr<ZenFSMetrics> metrics_;
+   bool allocation_diag_enabled_ = false;
++  bool maintenance_diag_enabled_ = false;
+   bool allocation_fallback_enabled_ = false;
+   bool migration_reserve_enabled_ = false;
+   // 专用迁移区始终持有 busy 标志，不占普通 IO 的令牌；使用已有预留配额。
+@@ -230,6 +246,10 @@
+     return allocation_diag_enabled_;
+   }
+   bool IsMigrationReserveEnabled() const { return migration_reserve_enabled_; }
++  bool IsMaintenanceDiagnosticsEnabled() const { return maintenance_diag_enabled_; }
++  std::map<uint64_t, ZoneResetState> GetZoneResetStates() const;
++  void LogZoneReset(const ZoneResetState& state, uint64_t previous_generation,
++                    uint64_t old_wp, const IOStatus& status, bool offline);
+   std::vector<Zone *> GetMetaZones() { return meta_zones; }
+ 
+   void SetFinishTreshold(uint32_t threshold) { finish_threshold_ = threshold; }
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -87,8 +87,17 @@
+   assert(!IsUsed());
+   assert(IsBusy());
+ 
++  const uint64_t old_wp = wp_;
++  const uint64_t previous_generation = reset_generation_.load();
++  reset_sequence_.fetch_add(1);
+   IOStatus ios = zbd_be_->Reset(start_, &offline, &max_capacity);
+-  if (ios != IOStatus::OK()) return ios;
++  if (ios != IOStatus::OK()) {
++    // 后端可能在 Reset 成功后查询状态失败，不能断言介质没有变化。
++    reset_generation_known_.store(false);
++    reset_sequence_.fetch_add(1);
++    zbd_->LogZoneReset(GetResetState(), previous_generation, old_wp, ios, false);
++    return ios;
++  }
+ 
+   if (offline)
+     capacity_ = 0;
+@@ -97,10 +106,25 @@
+ 
+   wp_ = start_;
+   lifetime_ = Env::WLTH_NOT_SET;
++  reset_generation_.fetch_add(1);
++  reset_generation_known_.store(true);
++  reset_sequence_.fetch_add(1);
++  zbd_->LogZoneReset(GetResetState(), previous_generation, old_wp, ios, offline);
+ 
+   return IOStatus::OK();
+ }
+ 
++ZoneResetState Zone::GetResetState() const {
++  const uint64_t before = reset_sequence_.load();
++  ZoneResetState state;
++  state.start = start_;
++  state.generation = reset_generation_.load();
++  state.known = reset_generation_known_.load();
++  state.sequence = reset_sequence_.load();
++  state.stable = before == state.sequence && state.sequence % 2 == 0;
++  return state;
++}
++
+ IOStatus Zone::Finish() {
+   assert(IsBusy());
+ 
+@@ -179,6 +203,12 @@
+   if (allocation_diag_enabled_) {
+     Info(logger_, "开启 Zone 分配诊断：复用原有扫描，占用中的 Zone 记为未观察");
+   }
++  const char *maintenance_env = getenv("ZENFS_MAINT_DIAG");
++  maintenance_diag_enabled_ = maintenance_env != nullptr &&
++                              strcmp(maintenance_env, "1") == 0;
++  if (maintenance_diag_enabled_) {
++    Info(logger_, "开启维护诊断：代际仅为当前进程成功 Reset 计数；不持久化、不覆盖外部 Reset、不改变选区资格");
++  }
+   const char *fallback_env = getenv("ZENFS_ALLOC_FALLBACK");
+   allocation_fallback_enabled_ =
+       fallback_env != nullptr && strcmp(fallback_env, "1") == 0;
+@@ -1132,6 +1162,24 @@
+   return zbd_be_->GetZoneReadPressure(report);
+ }
+ 
++std::map<uint64_t, ZoneResetState> ZonedBlockDevice::GetZoneResetStates() const {
++  std::map<uint64_t, ZoneResetState> states;
++  for (const auto* zone : io_zones) states.emplace(zone->start_, zone->GetResetState());
++  for (const auto* zone : meta_zones) states.emplace(zone->start_, zone->GetResetState());
++  return states;
++}
++
++void ZonedBlockDevice::LogZoneReset(const ZoneResetState& state,
++                                    uint64_t previous_generation,
++                                    uint64_t old_wp, const IOStatus& status,
++                                    bool offline) {
++  if (!maintenance_diag_enabled_) return;
++  Info(logger_, "Zone 重置诊断：Zone=%lu，状态=%s，主机代际=%lu/%lu，观察序号=%lu，代际可信=%d，原写指针=%lu，离线=%d，结果=%s",
++       state.start, status.ok() ? "成功" : "失败", previous_generation,
++       state.generation, state.sequence, state.known, old_wp,
++       status.ok() ? static_cast<int>(offline) : -1, status.ToString().c_str());
++}
++
+ void ZonedBlockDevice::EncodeJsonZone(std::ostream &json_stream,
+                                       const std::vector<Zone *> zones) {
+   bool first_element = true;
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -35,6 +35,40 @@
+ 
+ namespace ROCKSDB_NAMESPACE {
+ 
++// 只检查本进程 Reset 在观测窗口内是否变化，不保证文件映射或读数是原子快照。
++static bool IsMaintenanceWindowStable(const ZoneResetState& before,
++                                      const ZoneResetState& after,
++                                      const ZoneResetState& current) {
++  return before.stable && after.stable && current.stable &&
++         before.known && after.known && current.known &&
++         before.sequence == after.sequence && after.sequence == current.sequence &&
++         before.generation == after.generation && after.generation == current.generation;
++}
++
++static void LogMaintenanceObservation(
++    const std::shared_ptr<Logger>& logger, ZonedBlockDevice* device,
++    const char* stage, const ZoneSnapshot& zone, const ZoneReadPressure* pressure,
++    uint64_t covered, bool non_sst,
++    const std::map<uint64_t, ZoneResetState>& before,
++    const std::map<uint64_t, ZoneResetState>& after) {
++  if (!device->IsMaintenanceDiagnosticsEnabled()) return;
++  auto first = before.find(zone.start);
++  auto last = after.find(zone.start);
++  Zone* live = device->GetIOZone(zone.start);
++  if (first == before.end() || last == after.end() || live == nullptr) return;
++  const auto current = live->GetResetState();
++  const bool covered_all = covered == zone.used_capacity;
++  const bool eligible = zone.used_capacity > 0 && zone.wp != zone.start &&
++                        covered_all && !non_sst;
++  Info(logger, "Zone 维护观测：阶段=%s，Zone=%lu，主机代际=%lu/%lu/%lu，观察序号=%lu/%lu/%lu，重置窗稳定=%d，快照写指针=%lu，满区=%d，有效字节=%lu，覆盖字节=%lu，含非SST=%d，覆盖完整=%d，SST覆盖资格=%d，读压力可用=%d，达阈值块=%u，迁移准入=未检查",
++       stage, zone.start, first->second.generation, last->second.generation,
++       current.generation, first->second.sequence, last->second.sequence,
++       current.sequence, IsMaintenanceWindowStable(first->second, last->second, current),
++       zone.wp, zone.capacity == 0, zone.used_capacity, covered, non_sst,
++       covered_all, eligible, pressure != nullptr,
++       pressure != nullptr ? pressure->blocks_at_threshold : 0);
++}
++
+ Status Superblock::DecodeFrom(Slice* input) {
+   if (input->size() != ENCODED_SIZE) {
+     return Status::Corruption("ZenFS Superblock",
+@@ -301,11 +335,26 @@
+     options.zone_file_ = 1;
+     options.log_garbage_ = 1;
+ 
++    std::map<uint64_t, ZoneResetState> diagnostic_before;
++    if (zbd_->IsMaintenanceDiagnosticsEnabled()) diagnostic_before = zbd_->GetZoneResetStates();
+     GetZenFSSnapshot(snapshot, options);
+ 
+     uint64_t threshold = (100 - GC_SLOPE * (GC_START_LEVEL - free_percent));
+     ZoneReadPressureReport pressure;
+     IOStatus pressure_status = zbd_->GetZoneReadPressure(&pressure);
++    std::map<uint64_t, ZoneResetState> diagnostic_after;
++    std::map<uint64_t, uint64_t> diagnostic_covered;
++    std::set<uint64_t> diagnostic_non_sst;
++    if (zbd_->IsMaintenanceDiagnosticsEnabled()) {
++      diagnostic_after = zbd_->GetZoneResetStates();
++      for (const auto& ext : snapshot.extents_) {
++        diagnostic_covered[ext.zone_start] += ext.length;
++        if (ext.filename.size() < 4 ||
++            ext.filename.compare(ext.filename.size() - 4, 4, ".sst") != 0) {
++          diagnostic_non_sst.emplace(ext.zone_start);
++        }
++      }
++    }
+     std::map<uint64_t, ZoneReadPressure> pressure_by_zone;
+     if (pressure_status.ok()) {
+       for (const auto& entry : pressure.zones) {
+@@ -337,6 +386,12 @@
+           max_garbage_percent = std::max(max_garbage_percent, garbage_percent_approx);
+         }
+         auto pressure_it = pressure_by_zone.find(zone.start);
++        if (zbd_->IsMaintenanceDiagnosticsEnabled()) {
++          LogMaintenanceObservation(logger_, zbd_, "ZC候选", zone,
++              pressure_it != pressure_by_zone.end() ? &pressure_it->second : nullptr,
++              diagnostic_covered[zone.start], diagnostic_non_sst.count(zone.start) != 0,
++              diagnostic_before, diagnostic_after);
++        }
+         if (pressure_it != pressure_by_zone.end()) {
+           const auto& p = pressure_it->second;
+           Info(logger_, "ZC 候选：Zone %lu，无效比例 %lu%%，有效数据 %lu 字节，RR读数阈值 %lu，最大读数 %lu，读数总和 %lu，风险块 80%%/90%%/100%%=%u/%u/%u，选中 %d",
+@@ -387,6 +442,8 @@
+ }
+ 
+ IOStatus ZenFS::ReadReclaimOneZone() {
++  std::map<uint64_t, ZoneResetState> diagnostic_before;
++  if (zbd_->IsMaintenanceDiagnosticsEnabled()) diagnostic_before = zbd_->GetZoneResetStates();
+   ZoneReadPressureReport pressure;
+   IOStatus s = zbd_->GetZoneReadPressure(&pressure);
+   if (!s.ok()) return s;
+@@ -398,6 +455,9 @@
+   options.zone_file_ = 1;
+   GetZenFSSnapshot(snapshot, options);
+ 
++  std::map<uint64_t, ZoneResetState> diagnostic_after;
++  if (zbd_->IsMaintenanceDiagnosticsEnabled()) diagnostic_after = zbd_->GetZoneResetStates();
++
+   std::map<uint64_t, uint64_t> covered_bytes;
+   std::set<uint64_t> non_sst_zones;
+   for (const auto& ext : snapshot.extents_) {
+@@ -423,6 +483,9 @@
+     }
+ 
+     // 快照未覆盖所有有效数据时，不允许对该 Zone 执行 RR 迁移。
++    LogMaintenanceObservation(logger_, zbd_, "RR扫描", *zone_it, &zone_pressure,
++        covered_bytes[zone_it->start], non_sst_zones.count(zone_it->start) != 0,
++        diagnostic_before, diagnostic_after);
+     if (covered_bytes[zone_it->start] != zone_it->used_capacity ||
+         non_sst_zones.count(zone_it->start) != 0) {
+       Info(logger_, "RR 延后：Zone %lu 含未覆盖或非 SST 的有效数据",
+@@ -465,6 +528,9 @@
+       }
+     }
+ 
++    LogMaintenanceObservation(logger_, zbd_, "RR开始", *zone_it, &zone_pressure,
++        covered_bytes[zone_it->start], non_sst_zones.count(zone_it->start) != 0,
++        diagnostic_before, diagnostic_after);
+     Info(logger_, "RR 开始：Zone %lu，达阈值物理块 %u，有效数据 %lu 字节，封闭剩余容量 %lu 字节",
+          zone_it->start, zone_pressure.blocks_at_threshold,
+          zone_it->used_capacity, sacrificed_bytes);
