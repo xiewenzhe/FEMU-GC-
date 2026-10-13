@@ -1,0 +1,276 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -17,6 +17,7 @@
+ #include <unistd.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <map>
+ #include <set>
+ #include <sstream>
+@@ -28,6 +29,7 @@
+ #endif
+ #include "rocksdb/utilities/object_registry.h"
+ #include "snapshot.h"
++#include "rrzc_selector.h"
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+ 
+@@ -306,6 +308,27 @@
+ }
+ 
+ void ZenFS::GCWorker() {
++  // 首版只验证自动单区成本比较；默认不启用，不读取人工源区或未来计划。
++  const char* auto_mode = getenv("ZENFS_RRZC_MODE");
++  uint64_t auto_budget = 0, auto_window = 0;
++  auto parse_auto_parameter = [](const char* name, uint64_t low, uint64_t high,
++                                 uint64_t* result) {
++    const char* value = getenv(name); char* end = nullptr; errno = 0;
++    if (!value || value[0] < '0' || value[0] > '9') return false;
++    *result = strtoull(value, &end, 10);
++    return errno == 0 && end && *end == '\0' && *result >= low && *result <= high;
++  };
++  bool auto_enabled = auto_mode &&
++      (strcmp(auto_mode, "space") == 0 || strcmp(auto_mode, "rr") == 0) &&
++      parse_auto_parameter("ZENFS_RRZC_RECLAIM_BYTES", 1, INT64_MAX, &auto_budget) &&
++      parse_auto_parameter("ZENFS_RRZC_WINDOW_SECONDS", 1, 300, &auto_window);
++  const bool auto_use_rr = auto_enabled && strcmp(auto_mode, "rr") == 0;
++  std::map<uint64_t, rrzc::Trend> auto_trends;
++  if (auto_mode && !auto_enabled)
++    Error(logger_, "自动ZC：配置非法，保持原批量策略");
++  if (auto_enabled)
++    Info(logger_, "自动ZC：启用，模式=%s，单区回收预算=%lu，估计窗口秒=%lu，默认关闭，未来有效量冻结近似",
++         auto_mode, auto_budget, auto_window);
+   // 仅隔离实验：显式启用后，一次选择指定的原空间合格区，不实现风险评分。
+   bool test_choice_pending = false;
+   uint64_t test_source = 0;
+@@ -326,6 +349,10 @@
+       Error(logger_, "ZC实验单次选区：配置非法，保持原批量策略");
+     }
+   }
++  if (auto_enabled && test_choice_pending) {
++    Error(logger_, "自动ZC：禁止与人工指定选区混用，自动入口关闭");
++    auto_enabled = false;
++  }
+ 
+   while (run_gc_worker_) {
+     usleep(1000 * 1000 * 10);
+@@ -338,6 +365,41 @@
+       }
+     }
+     if (!superblock_->IsGCEnabled()) continue;
++
++    // 仅开启新入口时采样；同代际、相同有效量的最近两段最大值斜率，非逐块速率。
++    ZoneReadPressureReport auto_pressure;
++    bool auto_pressure_ok = false;
++    if (auto_enabled) {
++      const auto first = zbd_->GetZoneResetStates();
++      auto_pressure_ok = zbd_->GetZoneReadPressure(&auto_pressure).ok() &&
++                         auto_pressure.read_threshold > 0;
++      const auto last = zbd_->GetZoneResetStates();
++      std::vector<ZoneSnapshot> observed_zones;
++      zbd_->GetZoneSnapshot(observed_zones);
++      std::map<uint64_t, uint64_t> valid;
++      for (const auto& zone : observed_zones) valid[zone.start] = zone.used_capacity;
++      const uint64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++          std::chrono::steady_clock::now().time_since_epoch()).count();
++      if (auto_pressure_ok) {
++        for (const auto& p : auto_pressure.zones) {
++          if (!valid.count(p.start)) continue;
++          Zone* live = zbd_->GetIOZone(p.start);
++          const bool stable = live && first.count(p.start) && last.count(p.start) &&
++              IsMaintenanceWindowStable(first.at(p.start), last.at(p.start), live->GetResetState());
++          rrzc::Observation observation{ns, last.count(p.start) ? last.at(p.start).generation : 0,
++              last.count(p.start) ? last.at(p.start).sequence : 0, valid[p.start],
++              p.max_block_reads, p.sum_block_reads, auto_pressure.read_threshold, stable};
++          auto_trends[p.start].Observe(observation);
++          if (valid[p.start] && p.sum_block_reads)
++            Info(logger_, "自动ZC趋势：Zone=%lu，主机代际=%lu，稳定=%d，有效字节=%lu，最大读数=%lu，总读数=%lu，趋势可用=%d，摘要读每秒=%.6f",
++                 p.start, observation.generation, stable, observation.valid, observation.maximum,
++                 observation.total, auto_trends[p.start].ready, auto_trends[p.start].rate);
++        }
++      } else {
++        auto_trends.clear();
++        Info(logger_, "自动ZC：遥测不可用，清除历史，本轮不抵扣预计RR");
++      }
++    }
+ 
+     uint64_t non_free = zbd_->GetUsedSpace() + zbd_->GetReclaimableSpace();
+     uint64_t free = zbd_->GetFreeSpace();
+@@ -366,7 +428,7 @@
+     std::map<uint64_t, ZoneResetState> diagnostic_after;
+     std::map<uint64_t, uint64_t> diagnostic_covered;
+     std::set<uint64_t> diagnostic_non_sst;
+-    if (zbd_->IsMaintenanceDiagnosticsEnabled()) {
++    if (zbd_->IsMaintenanceDiagnosticsEnabled() || auto_enabled) {
+       diagnostic_after = zbd_->GetZoneResetStates();
+       for (const auto& ext : snapshot.extents_) {
+         diagnostic_covered[ext.zone_start] += ext.length;
+@@ -431,6 +493,82 @@
+       }
+     }
+ 
++    if (auto_enabled) {
++      const size_t original_count = migrate_zones_start.size();
++      uint64_t largest_empty = 0, aggregate_growth = 0;
++      bool partial_target_occupied = false, target_forecast_available = auto_pressure_ok;
++      for (const auto& zone : snapshot.zones_) {
++        if (zone.wp == zone.start && zone.used_capacity == 0)
++          largest_empty = std::max(largest_empty, zone.capacity);
++        if (zone.capacity > 0 && zone.used_capacity > 0) partial_target_occupied = true;
++        if (zone.used_capacity > 0) {
++          const auto it = auto_trends.find(zone.start);
++          if (it == auto_trends.end() || !it->second.ready) target_forecast_available = false;
++          else {
++            const uint64_t growth = it->second.Growth(auto_window);
++            if (growth > UINT64_MAX-aggregate_growth) target_forecast_available = false;
++            else aggregate_growth += growth;
++          }
++        }
++      }
++      std::vector<rrzc::Candidate> candidates;
++      for (const auto& zone : snapshot.zones_) {
++        if (!migrate_zones_start.count(zone.start)) continue;
++        rrzc::Candidate c;
++        c.zone = zone.start; c.valid = zone.used_capacity;
++        c.reclaimed = zone.max_capacity-zone.used_capacity;
++        c.covered = diagnostic_covered[zone.start] == zone.used_capacity &&
++                    !diagnostic_non_sst.count(zone.start);
++        c.target_available = largest_empty >= c.valid;
++        const auto trend = auto_trends.find(zone.start);
++        const auto p = pressure_by_zone.find(zone.start);
++        const auto current_reset = zbd_->GetIOZone(zone.start)->GetResetState();
++        c.estimate_available = auto_use_rr && rr_enabled_ && auto_pressure_ok &&
++            trend != auto_trends.end() && trend->second.ready &&
++            current_reset.known && current_reset.stable &&
++            current_reset.generation == trend->second.last.generation &&
++            current_reset.sequence == trend->second.last.sequence &&
++            trend->second.last.valid == zone.used_capacity &&
++            trend->second.last.threshold == pressure.read_threshold &&
++            p != pressure_by_zone.end() &&
++            trend->second.last.maximum == p->second.max_block_reads &&
++            trend->second.last.total == p->second.sum_block_reads;
++        uint64_t growth = 0;
++        if (c.estimate_available) {
++          growth = trend->second.Growth(auto_window);
++          // 不估多轮概率；预计增长达一个完整阈值时，不宣称提前ZC能避免RR。
++          if (p->second.max_block_reads >= pressure.read_threshold || growth >= pressure.read_threshold)
++            c.estimate_available = false;
++          else if (growth >= pressure.read_threshold-p->second.max_block_reads) {
++            c.rr_if_skipped = c.valid;
++            const bool target_safe_estimate = target_forecast_available &&
++                !partial_target_occupied && aggregate_growth < pressure.read_threshold;
++            if (!target_safe_estimate) c.rr_after_selected = c.valid;
++          }
++        }
++        candidates.push_back(c);
++        Info(logger_, "自动ZC候选：Zone=%lu，当前复制=%lu，净回收参考=%lu，覆盖资格=%d，空目标资格=%d，估计可用=%d，窗口增长估计=%lu，不选RR字节估计=%lu，选后RR字节保护项=%lu",
++             c.zone, c.valid, c.reclaimed, c.covered, c.target_available,
++             c.estimate_available, growth, c.rr_if_skipped, c.rr_after_selected);
++      }
++      const auto decision = rrzc::ChooseOne(candidates, auto_budget, auto_use_rr);
++      if (decision.found) {
++        migrate_zones_start.clear();
++        migrate_zones_start.emplace(decision.selected.zone);
++        Info(logger_, "自动ZC实际集合：模式=%s，原合格区=%zu，实际选中=1，Zone=%lu，回收预算=%lu，净回收参考=%lu，增量字节估计=%ld",
++             auto_mode, original_count, decision.selected.zone, auto_budget,
++             decision.selected.reclaimed, decision.incremental_bytes);
++      } else {
++        // 文件覆盖未齐时不绕过保护；预算超出单区能力时退回原批量空间路径。
++        const bool budget_possible = std::any_of(candidates.begin(), candidates.end(),
++            [&](const rrzc::Candidate& c) { return c.reclaimed >= auto_budget; });
++        if (budget_possible) migrate_zones_start.clear();
++        Info(logger_, "自动ZC实际集合：模式=%s，原合格区=%zu，实际选中=%zu，状态=%s",
++             auto_mode, original_count, migrate_zones_start.size(),
++             budget_possible ? "覆盖或空目标未就绪" : "单区预算不可满足，退回原批量策略");
++      }
++    }
++
+     if (test_choice_pending) {
+       const size_t original_count = migrate_zones_start.size();
+       uint64_t expected_used = 0, covered = 0;
+--- /dev/null
++++ b/fs/rrzc_selector.h
+@@ -0,0 +1,82 @@
++// 验证性单区成本比较内核，不是最终预测器或正式评分公式。
++// 输入中的未来字节是估计值；内核不读取文件名、人工受害区或未来失效计划。
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <limits>
++#include <vector>
++
++namespace rrzc {
++struct Observation {
++  uint64_t ns = 0, generation = 0, sequence = 0, valid = 0, maximum = 0;
++  uint64_t total = 0, threshold = 0;
++  bool stable = false;
++};
++
++struct Trend {
++  Observation last;
++  bool initialized = false, ready = false;
++  double previous_rate = 0, rate = 0;
++
++  void Observe(const Observation& now) {
++    // 最大值可能来自不同物理块，所得斜率仅称为摘要趋势。
++    const bool comparable = initialized && last.stable && now.stable &&
++        now.generation == last.generation && now.sequence == last.sequence &&
++        now.valid == last.valid && now.threshold == last.threshold &&
++        now.maximum >= last.maximum && now.total >= last.total &&
++        now.ns > last.ns && now.ns-last.ns <= 30000000000ULL;
++    if (comparable) {
++      const double current = double(now.maximum-last.maximum)*1e9/double(now.ns-last.ns);
++      rate = std::max(current, previous_rate);
++      previous_rate = current;
++      ready = true;
++    } else {
++      ready = false; rate = previous_rate = 0;
++    }
++    last = now; initialized = true;
++  }
++
++  uint64_t Growth(uint64_t seconds) const {
++    if (!ready || !std::isfinite(rate) || rate < 0) return 0;
++    const long double value = std::ceil(static_cast<long double>(rate)*seconds);
++    if (value >= std::numeric_limits<uint64_t>::max()) return std::numeric_limits<uint64_t>::max();
++    return static_cast<uint64_t>(value);
++  }
++};
++
++struct Candidate {
++  uint64_t zone = 0, valid = 0, reclaimed = 0;
++  uint64_t rr_if_skipped = 0, rr_after_selected = 0;
++  bool covered = false, target_available = false, estimate_available = false;
++};
++
++struct Decision {
++  bool found = false;
++  Candidate selected;
++  int64_t incremental_bytes = 0;
++};
++
++inline Decision ChooseOne(const std::vector<Candidate>& candidates,
++                          uint64_t reclaim_budget, bool use_rr) {
++  Decision result;
++  if (reclaim_budget == 0) return result;
++  for (const auto& c : candidates) {
++    if (!c.covered || !c.target_available || c.valid == 0 || c.reclaimed < reclaim_budget) continue;
++    // 比较相对“不选”的新增成本；其余候选的不选成本是公共项。
++    // 同为字节的成本可直接比较，无读数与字节的任意加权。
++    __int128 cost = c.valid;
++    if (use_rr && c.estimate_available)
++      cost += static_cast<__int128>(c.rr_after_selected)-c.rr_if_skipped;
++    if (cost < std::numeric_limits<int64_t>::min() || cost > std::numeric_limits<int64_t>::max()) continue;
++    const int64_t value = static_cast<int64_t>(cost);
++    if (!result.found || value < result.incremental_bytes ||
++        (value == result.incremental_bytes &&
++         (c.reclaimed > result.selected.reclaimed ||
++          (c.reclaimed == result.selected.reclaimed && c.zone < result.selected.zone)))) {
++      result = {true, c, value};
++    }
++  }
++  return result;
++}
++}  // 命名空间结束。

@@ -1,0 +1,55 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -308,2 +308,23 @@
+ void ZenFS::GCWorker() {
++  // 仅隔离实验：显式启用后，一次选择指定的原空间合格区，不实现风险评分。
++  bool test_choice_pending = false;
++  uint64_t test_source = 0;
++  const char* test_enable = getenv("ZENFS_ZC_TEST_ENABLE");
++  if (test_enable && strcmp(test_enable, "1") == 0) {
++    const char* value = getenv("ZENFS_ZC_TEST_SOURCE");
++    char* end = nullptr;
++    errno = 0;
++    if (value && value[0] >= '0' && value[0] <= '9') {
++      test_source = strtoull(value, &end, 10);
++      test_choice_pending = errno == 0 && end && *end == '\0' &&
++                            zbd_->GetIOZone(test_source) != nullptr;
++    }
++    if (test_choice_pending) {
++      Info(logger_, "ZC实验单次选区：已启用，指定Zone=%lu，仅限一次原空间合格选择，非默认策略",
++           test_source);
++    } else {
++      Error(logger_, "ZC实验单次选区：配置非法，保持原批量策略");
++    }
++  }
++
+   while (run_gc_worker_) {
+@@ -413,2 +434,27 @@
+-    std::vector<ZoneExtentSnapshot*> migrate_exts;
++    if (test_choice_pending) {
++      const size_t original_count = migrate_zones_start.size();
++      uint64_t expected_used = 0, covered = 0;
++      for (const auto& zone : snapshot.zones_) {
++        if (zone.start == test_source) expected_used = zone.used_capacity;
++      }
++      for (const auto& ext : snapshot.extents_) {
++        if (ext.zone_start == test_source) covered += ext.length;
++      }
++      const bool ready = migrate_zones_start.count(test_source) != 0 &&
++                         expected_used > 0 && covered == expected_used;
++      migrate_zones_start.clear();
++      if (ready) {
++        migrate_zones_start.emplace(test_source);
++        test_choice_pending = false;
++        // 上方候选日志是原资格；本条和汇总是实际集合，不改日志历史。
++        Info(logger_, "ZC实验单次选区：实际集合，指定Zone=%lu，原合格区=%zu，实际选中=1，之后恢复原批量策略",
++             test_source, original_count);
++      } else {
++        // 准备锁导致覆盖未齐时保留机会，仍输出本轮实际空集合汇总。
++        Info(logger_, "ZC实验单次选区：实际集合，指定Zone=%lu，原合格区=%zu，实际选中=0，继续等待原空间资格及完整覆盖",
++             test_source, original_count);
++      }
++    }
++
++    std::vector<ZoneExtentSnapshot*> migrate_exts;
+     for (auto& ext : snapshot.extents_) {
