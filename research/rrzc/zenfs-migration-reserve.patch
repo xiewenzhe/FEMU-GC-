@@ -1,0 +1,212 @@
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -187,6 +187,11 @@
+   std::shared_ptr<ZenFSMetrics> metrics_;
+   bool allocation_diag_enabled_ = false;
+   bool allocation_fallback_enabled_ = false;
++  bool migration_reserve_enabled_ = false;
++  // 专用迁移区始终持有 busy 标志，不占普通 IO 的令牌；使用已有预留配额。
++  std::mutex migration_reserve_mtx_;
++  Zone *migration_reserve_zone_ = nullptr;
++  IOStatus EnsureMigrationReserve();
+ 
+   void EncodeJsonZone(std::ostream &json_stream,
+                       const std::vector<Zone *> zones);
+@@ -224,6 +229,7 @@
+   bool IsAllocationDiagnosticsEnabled() const {
+     return allocation_diag_enabled_;
+   }
++  bool IsMigrationReserveEnabled() const { return migration_reserve_enabled_; }
+   std::vector<Zone *> GetMetaZones() { return meta_zones; }
+ 
+   void SetFinishTreshold(uint32_t threshold) { finish_threshold_ = threshold; }
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -185,6 +185,12 @@
+   if (allocation_fallback_enabled_) {
+     Info(logger_, "开启实验分配回退：无空 Zone 时重试寿命匹配合适的部分 Zone；非原始分配基线");
+   }
++  const char *reserve_env = getenv("ZENFS_MIGRATE_RESERVE");
++  migration_reserve_enabled_ =
++      reserve_env != nullptr && strcmp(reserve_env, "1") == 0;
++  if (migration_reserve_enabled_) {
++    Info(logger_, "开启实验迁移预留：专用目标不供普通写入使用；非原始分配基线");
++  }
+   if (backend == ZbdBackendType::kBlockDev) {
+     zbd_be_ = std::unique_ptr<ZbdlibBackend>(new ZbdlibBackend(path));
+     Info(logger_, "New Zoned Block Device: %s", zbd_be_->GetFilename().c_str());
+@@ -279,6 +285,26 @@
+ 
+   start_time_ = time(NULL);
+ 
++  if (migration_reserve_enabled_ && !readonly) {
++    std::lock_guard<std::mutex> lock(migration_reserve_mtx_);
++    // 重新挂载时原专用部分区也被计入普通活跃数；超额时接管一个，避免双重计数。
++    if (active_io_zones_.load() > max_nr_active_io_zones_) {
++      for (auto *zone : io_zones) {
++        if (!zone->Acquire()) continue;
++        if (!zone->IsEmpty() && !zone->IsFull()) {
++          migration_reserve_zone_ = zone;
++          PutActiveIOZoneToken();
++          Info(logger_, "迁移预留接管已有活跃区：Zone=%lu", zone->start_);
++          break;
++        }
++        ios = zone->CheckRelease();
++        if (!ios.ok()) return ios;
++      }
++    }
++    ios = EnsureMigrationReserve();
++    if (!ios.ok()) return ios;
++  }
++
+   return IOStatus::OK();
+ }
+ 
+@@ -451,6 +477,10 @@
+ }
+ 
+ IOStatus ZonedBlockDevice::ResetUnusedIOZones() {
++  // 与普通空区分配串行，回收出的第一个空区优先补充迁移预留。
++  std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,
++                                           std::defer_lock);
++  if (migration_reserve_enabled_) reserve_lock.lock();
+   for (const auto z : io_zones) {
+     if (z->Acquire()) {
+       if (!z->IsEmpty() && !z->IsUsed()) {
+@@ -466,6 +496,7 @@
+       }
+     }
+   }
++  if (migration_reserve_enabled_) return EnsureMigrationReserve();
+   return IOStatus::OK();
+ }
+ 
+@@ -677,6 +708,13 @@
+ IOStatus ZonedBlockDevice::AllocateEmptyZone(Zone **zone_out,
+                                             std::string *observation) {
+   IOStatus s;
++  std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,
++                                           std::defer_lock);
++  if (migration_reserve_enabled_) {
++    reserve_lock.lock();
++    s = EnsureMigrationReserve();
++    if (!s.ok()) return s;
++  }
+   Zone *allocated_zone = nullptr;
+   uint64_t observed = 0, busy = 0;
+   for (const auto z : io_zones) {
+@@ -735,13 +773,47 @@
+   return ret;
+ }
+ 
++// 调用者须持有 migration_reserve_mtx_；空区只锁定，不提前写入或擦除。
++IOStatus ZonedBlockDevice::EnsureMigrationReserve() {
++  if (migration_reserve_zone_ != nullptr) return IOStatus::OK();
++  for (auto *zone : io_zones) {
++    if (!zone->Acquire()) continue;
++    if (zone->IsEmpty()) {
++      migration_reserve_zone_ = zone;
++      Info(logger_, "迁移预留取得空区：Zone=%lu", zone->start_);
++      return IOStatus::OK();
++    }
++    auto s = zone->CheckRelease();
++    if (!s.ok()) return s;
++  }
++  // 无空区时保持空指针，等待后续回收补充，不凭空保证迁移必定成功。
++  return IOStatus::OK();
++}
++
+ IOStatus ZonedBlockDevice::ReleaseMigrateZone(Zone *zone) {
+   IOStatus s = IOStatus::OK();
+   {
+     std::unique_lock<std::mutex> lock(migrate_zone_mtx_);
+     migrating_ = false;
+     if (zone != nullptr) {
+-      s = zone->CheckRelease();
++      if (migration_reserve_enabled_) {
++        std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
++        s = zone->Close();
++        const bool reserved = zone == migration_reserve_zone_;
++        if (!reserved || zone->IsFull()) {
++          // 普通部分目标写满后，其原有活跃令牌需要归还；专用区不持此令牌。
++          if (!reserved && zone->IsFull()) PutActiveIOZoneToken();
++          auto release_status = zone->CheckRelease();
++          if (s.ok()) s = release_status;
++          if (reserved) {
++            migration_reserve_zone_ = nullptr;
++            auto reserve_status = EnsureMigrationReserve();
++            if (s.ok()) s = reserve_status;
++          }
++        }
++      } else {
++        s = zone->CheckRelease();
++      }
+       Info(logger_, "ReleaseMigrateZone: %lu", zone->start_);
+     }
+   }
+@@ -760,10 +832,39 @@
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   auto s =
+       GetBestOpenZoneMatch(file_lifetime, &best_diff, out_zone, min_capacity);
++  if (migration_reserve_enabled_ && s.ok() && *out_zone == nullptr) {
++    std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
++    s = EnsureMigrationReserve();
++    Zone *reserved = migration_reserve_zone_;
++    if (s.ok() && reserved != nullptr && min_capacity > reserved->max_capacity_) {
++      s = IOStatus::NoSpace("迁移片段超过单个预留 Zone 容量");
++    }
++    if (s.ok() && reserved != nullptr && reserved->capacity_ < min_capacity) {
++      // 不足以容纳下一个片段时结束专用区；无有效数据则直接重置。
++      if (!reserved->IsUsed()) {
++        s = reserved->Reset();
++      } else {
++        s = reserved->Finish();
++        if (s.ok()) {
++          s = reserved->CheckRelease();
++          migration_reserve_zone_ = nullptr;
++          if (s.ok()) s = EnsureMigrationReserve();
++        }
++      }
++    }
++    reserved = migration_reserve_zone_;
++    if (s.ok() && reserved != nullptr && reserved->capacity_ >= min_capacity) {
++      reserved->lifetime_ = file_lifetime;
++      *out_zone = reserved;
++      Info(logger_, "迁移使用专用预留：Zone=%lu，需要=%u，剩余=%lu",
++           reserved->start_, min_capacity, reserved->capacity_);
++    }
++  }
+   if (s.ok() && (*out_zone) != nullptr) {
+     Info(logger_, "TakeMigrateZone: %lu", (*out_zone)->start_);
+   } else {
+     migrating_ = false;
++    if (migration_reserve_enabled_) migrate_resource_.notify_one();
+   }
+ 
+   return s;
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -1986,9 +1986,22 @@
+ 
+     Zone* target_zone = nullptr;
+ 
++    // 实验预留模式按实际物理写入量申请容量，包含稀疏头和末尾对齐填充。
++    uint32_t required_capacity = ext->length_;
++    if (zbd_->IsMigrationReserveEnabled()) {
++      uint64_t physical_length = ext->length_;
++      if (zfile->IsSparse()) physical_length += ZoneFile::SPARSE_HEADER_SIZE;
++      const uint64_t block_size = zbd_->GetBlockSize();
++      physical_length = ((physical_length + block_size - 1) / block_size) * block_size;
++      if (physical_length > UINT32_MAX) {
++        s = IOStatus::NoSpace("迁移片段对齐后超过容量参数范围");
++        break;
++      }
++      required_capacity = static_cast<uint32_t>(physical_length);
++    }
+     // 获取迁移目标 Zone。
+     s = zbd_->TakeMigrateZone(&target_zone, zfile->GetWriteLifeTimeHint(),
+-                              ext->length_);
++                              required_capacity);
+     if (!s.ok()) {
+       break;
+     }
