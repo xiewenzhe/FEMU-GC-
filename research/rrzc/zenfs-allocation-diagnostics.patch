@@ -1,0 +1,269 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -289,6 +289,11 @@
+     uint64_t free_percent = (100 * free) / (free + non_free);
+     ZenFSSnapshot snapshot;
+     ZenFSSnapshotOptions options;
++    if (zbd_->IsAllocationDiagnosticsEnabled()) {
++      Info(logger_, "GC 检查：空闲=%lu 字节，非空闲=%lu 字节，空闲比例=%lu%%，启动水平=%lu%%，进入选区=%d",
++           free, non_free, free_percent, GC_START_LEVEL,
++           free_percent <= GC_START_LEVEL);
++    }
+ 
+     if (free_percent > GC_START_LEVEL) continue;
+ 
+@@ -311,16 +316,30 @@
+            pressure_status.ToString().c_str());
+     }
+     std::set<uint64_t> migrate_zones_start;
++    uint64_t full_zones = 0, max_garbage_percent = 0;
++    uint64_t empty_zones = 0, partial_zones = 0, partial_capacity = 0;
+     for (const auto& zone : snapshot.zones_) {
++      if (zbd_->IsAllocationDiagnosticsEnabled()) {
++        if (zone.wp == zone.start) {
++          ++empty_zones;
++        } else if (zone.capacity > 0) {
++          ++partial_zones;
++          partial_capacity += zone.capacity;
++        }
++      }
+       if (zone.capacity == 0) {
+         uint64_t garbage_percent_approx =
+             100 - 100 * zone.used_capacity / zone.max_capacity;
+         bool selected = garbage_percent_approx > threshold &&
+                         garbage_percent_approx < 100;
++        if (zbd_->IsAllocationDiagnosticsEnabled()) {
++          ++full_zones;
++          max_garbage_percent = std::max(max_garbage_percent, garbage_percent_approx);
++        }
+         auto pressure_it = pressure_by_zone.find(zone.start);
+         if (pressure_it != pressure_by_zone.end()) {
+           const auto& p = pressure_it->second;
+-          Info(logger_, "ZC 候选：Zone %lu，无效比例 %lu%%，有效数据 %lu 字节，阈值 %lu，最大读数 %lu，读数总和 %lu，风险块 80%%/90%%/100%%=%u/%u/%u，选中 %d",
++          Info(logger_, "ZC 候选：Zone %lu，无效比例 %lu%%，有效数据 %lu 字节，RR读数阈值 %lu，最大读数 %lu，读数总和 %lu，风险块 80%%/90%%/100%%=%u/%u/%u，选中 %d",
+                zone.start, garbage_percent_approx, zone.used_capacity,
+                pressure.read_threshold, p.max_block_reads, p.sum_block_reads,
+                p.blocks_ge_80pct, p.blocks_ge_90pct,
+@@ -343,6 +362,12 @@
+         migrate_exts.push_back(&ext);
+       }
+     }
++    if (zbd_->IsAllocationDiagnosticsEnabled()) {
++      Info(logger_, "GC 选区汇总：检查空闲比例=%lu%%，无效比例门槛=%lu%%，满Zone=%lu，最大无效比例=%lu%%，选中Zone=%zu，迁移片段=%zu，快照空Zone=%lu，快照部分Zone=%lu，部分剩余=%lu 字节",
++           free_percent, threshold, full_zones, max_garbage_percent,
++           migrate_zones_start.size(), migrate_exts.size(), empty_zones,
++           partial_zones, partial_capacity);
++    }
+ 
+     if (migrate_exts.size() > 0) {
+       IOStatus s;
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -174,6 +174,11 @@
+                                    std::shared_ptr<Logger> logger,
+                                    std::shared_ptr<ZenFSMetrics> metrics)
+     : logger_(logger), metrics_(metrics) {
++  const char *diag_env = getenv("ZENFS_ALLOC_DIAG");
++  allocation_diag_enabled_ = diag_env != nullptr && strcmp(diag_env, "1") == 0;
++  if (allocation_diag_enabled_) {
++    Info(logger_, "开启 Zone 分配诊断：复用原有扫描，占用中的 Zone 记为未观察");
++  }
+   if (backend == ZbdBackendType::kBlockDev) {
+     zbd_be_ = std::unique_ptr<ZbdlibBackend>(new ZbdlibBackend(path));
+     Info(logger_, "New Zoned Block Device: %s", zbd_be_->GetFilename().c_str());
+@@ -591,13 +596,36 @@
+ 
+ IOStatus ZonedBlockDevice::GetBestOpenZoneMatch(
+     Env::WriteLifeTimeHint file_lifetime, unsigned int *best_diff_out,
+-    Zone **zone_out, uint32_t min_capacity) {
++    Zone **zone_out, uint32_t min_capacity, std::string *observation) {
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   Zone *allocated_zone = nullptr;
+   IOStatus s;
++  uint64_t observed = 0, busy = 0, empty = 0, full = 0, partial = 0;
++  uint64_t empty_capacity = 0, partial_capacity = 0;
++  std::ostringstream partial_details;
+ 
+   for (const auto z : io_zones) {
+     if (z->Acquire()) {
++      // 仅在原分配扫描已经取得独占权时读取诊断字段，不新增 Zone 锁操作。
++      if (observation != nullptr) {
++        ++observed;
++        if (z->IsEmpty()) {
++          ++empty;
++          empty_capacity += z->capacity_;
++        } else if (z->IsFull()) {
++          ++full;
++        } else {
++          ++partial;
++          partial_capacity += z->capacity_;
++          partial_details << " [Zone=" << z->start_
++                          << "，剩余=" << z->capacity_
++                          << "，有效=" << z->used_capacity_.load()
++                          << "，寿命=" << static_cast<int>(z->lifetime_)
++                          << "，匹配差="
++                          << GetLifeTimeDiff(z->lifetime_, file_lifetime)
++                          << "]";
++        }
++      }
+       if ((z->used_capacity_ > 0) && !z->IsFull() &&
+           z->capacity_ >= min_capacity) {
+         unsigned int diff = GetLifeTimeDiff(z->lifetime_, file_lifetime);
+@@ -620,20 +648,34 @@
+         s = z->CheckRelease();
+         if (!s.ok()) return s;
+       }
++    } else if (observation != nullptr) {
++      ++busy;
+     }
+   }
+ 
+   *best_diff_out = best_diff;
+   *zone_out = allocated_zone;
++  if (observation != nullptr) {
++    std::ostringstream summary;
++    summary << "匹配扫描：已观察=" << observed << "，占用未观察=" << busy
++            << "，空=" << empty << "，满=" << full << "，部分=" << partial
++            << "，空区剩余字节=" << empty_capacity
++            << "，部分区剩余字节=" << partial_capacity
++            << "，部分区明细=" << partial_details.str();
++    *observation = summary.str();
++  }
+ 
+   return IOStatus::OK();
+ }
+ 
+-IOStatus ZonedBlockDevice::AllocateEmptyZone(Zone **zone_out) {
++IOStatus ZonedBlockDevice::AllocateEmptyZone(Zone **zone_out,
++                                            std::string *observation) {
+   IOStatus s;
+   Zone *allocated_zone = nullptr;
++  uint64_t observed = 0, busy = 0;
+   for (const auto z : io_zones) {
+     if (z->Acquire()) {
++      if (observation != nullptr) ++observed;
+       if (z->IsEmpty()) {
+         allocated_zone = z;
+         break;
+@@ -641,9 +683,17 @@
+         s = z->CheckRelease();
+         if (!s.ok()) return s;
+       }
++    } else if (observation != nullptr) {
++      ++busy;
+     }
+   }
+   *zone_out = allocated_zone;
++  if (observation != nullptr) {
++    std::ostringstream summary;
++    summary << "空区扫描：已观察=" << observed << "，占用未观察=" << busy
++            << "，获得空区=" << (allocated_zone != nullptr);
++    *observation = summary.str();
++  }
+   return IOStatus::OK();
+ }
+ 
+@@ -719,6 +769,10 @@
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   int new_zone = 0;
+   IOStatus s;
++  std::string match_observation, empty_observation;
++  uint64_t matched_start = 0, matched_capacity = 0;
++  bool had_match = false, discarded_match = false;
++  int active_token_before_discard = -1;
+ 
+   auto tag = ZENFS_WAL_IO_ALLOC_LATENCY;
+   if (io_type != IOType::kWAL) {
+@@ -749,16 +803,23 @@
+   WaitForOpenIOZoneToken(io_type == IOType::kWAL);
+ 
+   /* Try to fill an already open zone(with the best life time diff) */
+-  s = GetBestOpenZoneMatch(file_lifetime, &best_diff, &allocated_zone);
++  s = GetBestOpenZoneMatch(file_lifetime, &best_diff, &allocated_zone, 0,
++                          allocation_diag_enabled_ ? &match_observation : nullptr);
+   if (!s.ok()) {
+     PutOpenIOZoneToken();
+     return s;
+   }
+ 
+   // Holding allocated_zone if != nullptr
++  if (allocation_diag_enabled_ && allocated_zone != nullptr) {
++    had_match = true;
++    matched_start = allocated_zone->start_;
++    matched_capacity = allocated_zone->capacity_;
++  }
+ 
+   if (best_diff >= LIFETIME_DIFF_COULD_BE_WORSE) {
+     bool got_token = GetActiveIOZoneTokenIfAvailable();
++    if (allocation_diag_enabled_) active_token_before_discard = got_token;
+ 
+     /* If we did not get a token, try to use the best match, even if the life
+      * time diff not good but a better choice than to finish an existing zone
+@@ -777,6 +838,7 @@
+           return s;
+         }
+         allocated_zone = nullptr;
++        if (allocation_diag_enabled_) discarded_match = true;
+       }
+     }
+ 
+@@ -791,7 +853,8 @@
+         }
+       }
+ 
+-      s = AllocateEmptyZone(&allocated_zone);
++      s = AllocateEmptyZone(&allocated_zone,
++                            allocation_diag_enabled_ ? &empty_observation : nullptr);
+       if (!s.ok()) {
+         PutActiveIOZoneToken();
+         PutOpenIOZoneToken();
+@@ -816,6 +879,16 @@
+           allocated_zone->lifetime_, file_lifetime);
+   } else {
+     PutOpenIOZoneToken();
++    if (allocation_diag_enabled_) {
++      // 两次扫描不是同一时刻的全局快照；未观察的 Zone 不能视为空或满。
++      Info(logger_, "Zone 分配返回空：文件寿命=%d，IO类型=%d，最佳匹配差=%u，有匹配=%d，匹配Zone=%lu，匹配剩余=%lu 字节，放弃匹配=%d，放弃前取得活跃令牌=%d，活跃令牌=%ld/%u，打开令牌=%ld/%u；%s；%s",
++           static_cast<int>(file_lifetime), static_cast<int>(io_type), best_diff,
++           had_match, matched_start, matched_capacity, discarded_match,
++           active_token_before_discard, active_io_zones_.load(),
++           max_nr_active_io_zones_, open_io_zones_.load(),
++           max_nr_open_io_zones_, match_observation.c_str(),
++           empty_observation.c_str());
++    }
+   }
+ 
+   if (io_type != IOType::kWAL) {
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -185,6 +185,7 @@
+   unsigned int max_nr_open_io_zones_;
+ 
+   std::shared_ptr<ZenFSMetrics> metrics_;
++  bool allocation_diag_enabled_ = false;
+ 
+   void EncodeJsonZone(std::ostream &json_stream,
+                       const std::vector<Zone *> zones);
+@@ -219,6 +220,9 @@
+   uint64_t GetZoneSize();
+   uint32_t GetNrZones();
+   IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
++  bool IsAllocationDiagnosticsEnabled() const {
++    return allocation_diag_enabled_;
++  }
+   std::vector<Zone *> GetMetaZones() { return meta_zones; }
+ 
+   void SetFinishTreshold(uint32_t threshold) { finish_threshold_ = threshold; }
+@@ -257,8 +261,10 @@
+   IOStatus FinishCheapestIOZone();
+   IOStatus GetBestOpenZoneMatch(Env::WriteLifeTimeHint file_lifetime,
+                                 unsigned int *best_diff_out, Zone **zone_out,
+-                                uint32_t min_capacity = 0);
+-  IOStatus AllocateEmptyZone(Zone **zone_out);
++                                uint32_t min_capacity = 0,
++                                std::string *observation = nullptr);
++  IOStatus AllocateEmptyZone(Zone **zone_out,
++                            std::string *observation = nullptr);
+ };
+ 
+ }  // namespace ROCKSDB_NAMESPACE

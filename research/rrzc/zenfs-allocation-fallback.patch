@@ -1,0 +1,80 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -179,6 +179,12 @@
+   if (allocation_diag_enabled_) {
+     Info(logger_, "开启 Zone 分配诊断：复用原有扫描，占用中的 Zone 记为未观察");
+   }
++  const char *fallback_env = getenv("ZENFS_ALLOC_FALLBACK");
++  allocation_fallback_enabled_ =
++      fallback_env != nullptr && strcmp(fallback_env, "1") == 0;
++  if (allocation_fallback_enabled_) {
++    Info(logger_, "开启实验分配回退：无空 Zone 时重试寿命匹配合适的部分 Zone；非原始分配基线");
++  }
+   if (backend == ZbdBackendType::kBlockDev) {
+     zbd_be_ = std::unique_ptr<ZbdlibBackend>(new ZbdlibBackend(path));
+     Info(logger_, "New Zoned Block Device: %s", zbd_be_->GetFilename().c_str());
+@@ -867,6 +873,54 @@
+         new_zone = true;
+       } else {
+         PutActiveIOZoneToken();
++        if (allocation_fallback_enabled_ && io_type != IOType::kWAL) {
++          // 不持有 Zone 独占权或额外活跃令牌等待，让写入和 GC 能继续推进。
++          // 最多重试 200 次，间隔 50 毫秒；超时仍沿用原来的分配失败路径。
++          for (unsigned int attempt = 0; attempt < 200; ++attempt) {
++            if (GetActiveIOZoneTokenIfAvailable()) {
++              s = AllocateEmptyZone(&allocated_zone);
++              if (!s.ok() || allocated_zone == nullptr) {
++                PutActiveIOZoneToken();
++              }
++              if (!s.ok()) {
++                PutOpenIOZoneToken();
++                return s;
++              }
++              if (allocated_zone != nullptr) {
++                allocated_zone->lifetime_ = file_lifetime;
++                new_zone = true;
++                Info(logger_, "分配回退成功：重试=%u，新空Zone=%lu",
++                     attempt + 1, allocated_zone->start_);
++                break;
++              }
++            }
++
++            // 部分区使用已有活跃令牌；不放宽寿命差到 100。
++            unsigned int fallback_diff = LIFETIME_DIFF_NOT_GOOD;
++            s = GetBestOpenZoneMatch(file_lifetime, &fallback_diff,
++                                    &allocated_zone);
++            if (!s.ok()) {
++              PutOpenIOZoneToken();
++              return s;
++            }
++            if (allocated_zone != nullptr &&
++                fallback_diff > LIFETIME_DIFF_COULD_BE_WORSE) {
++              s = allocated_zone->CheckRelease();
++              allocated_zone = nullptr;
++              if (!s.ok()) {
++                PutOpenIOZoneToken();
++                return s;
++              }
++            }
++            if (allocated_zone != nullptr) {
++              Info(logger_, "分配回退成功：重试=%u，文件寿命=%d，匹配差=%u，Zone=%lu，剩余=%lu 字节",
++                   attempt + 1, static_cast<int>(file_lifetime), fallback_diff,
++                   allocated_zone->start_, allocated_zone->capacity_);
++              break;
++            }
++            if (attempt + 1 < 200) usleep(50 * 1000);
++          }
++        }
+       }
+     }
+   }
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -186,6 +186,7 @@
+ 
+   std::shared_ptr<ZenFSMetrics> metrics_;
+   bool allocation_diag_enabled_ = false;
++  bool allocation_fallback_enabled_ = false;
+ 
+   void EncodeJsonZone(std::ostream &json_stream,
+                       const std::vector<Zone *> zones);
