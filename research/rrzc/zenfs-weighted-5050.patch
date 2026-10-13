@@ -1,0 +1,175 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -28,6 +28,7 @@
+ #endif
+ #include "rocksdb/utilities/object_registry.h"
+ #include "snapshot.h"
++#include "rrzc_weighted_selector.h"
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+ 
+@@ -306,6 +307,25 @@
+ }
+ 
+ void ZenFS::GCWorker() {
++  // 仅显式开启时使用简单单区策略；不启用趋势、未来失效或维护成本估计。
++  const char* simple_mode = getenv("ZENFS_RRZC_SIMPLE_MODE");
++  uint64_t simple_budget = 0;
++  bool simple_enabled = simple_mode &&
++      (strcmp(simple_mode, "valid") == 0 || strcmp(simple_mode, "weighted") == 0);
++  if (simple_enabled) {
++    const char* value = getenv("ZENFS_RRZC_RECLAIM_BYTES"); char* end = nullptr;
++    errno = 0;
++    if (value && value[0] >= '0' && value[0] <= '9') {
++      simple_budget = strtoull(value, &end, 10);
++      simple_enabled = errno == 0 && end && *end == '\0' && simple_budget > 0;
++    } else simple_enabled = false;
++  }
++  const bool simple_weighted = simple_enabled && strcmp(simple_mode, "weighted") == 0;
++  if (simple_mode && !simple_enabled)
++    Error(logger_, "简单双因素：配置非法，保持原批量策略");
++  if (simple_enabled)
++    Info(logger_, "简单双因素：启用，模式=%s，回收预算=%lu，有效量权重=%d%%，块读数权重=%d%%，无趋势或未来预测",
++         simple_mode, simple_budget, simple_weighted ? 50 : 100, simple_weighted ? 50 : 0);
+   // 仅隔离实验：显式启用后，一次选择指定的原空间合格区，不实现风险评分。
+   bool test_choice_pending = false;
+   uint64_t test_source = 0;
+@@ -327,6 +347,11 @@
+     }
+   }
+ 
++  if (simple_enabled && test_choice_pending) {
++    Error(logger_, "简单双因素：禁止与人工指定选区混用，新入口关闭");
++    simple_enabled = false;
++  }
++
+   while (run_gc_worker_) {
+     usleep(1000 * 1000 * 10);
+ 
+@@ -357,7 +382,7 @@
+     options.log_garbage_ = 1;
+ 
+     std::map<uint64_t, ZoneResetState> diagnostic_before;
+-    if (zbd_->IsMaintenanceDiagnosticsEnabled()) diagnostic_before = zbd_->GetZoneResetStates();
++    if (zbd_->IsMaintenanceDiagnosticsEnabled() || simple_enabled) diagnostic_before = zbd_->GetZoneResetStates();
+     GetZenFSSnapshot(snapshot, options);
+ 
+     uint64_t threshold = (100 - GC_SLOPE * (GC_START_LEVEL - free_percent));
+@@ -366,7 +391,7 @@
+     std::map<uint64_t, ZoneResetState> diagnostic_after;
+     std::map<uint64_t, uint64_t> diagnostic_covered;
+     std::set<uint64_t> diagnostic_non_sst;
+-    if (zbd_->IsMaintenanceDiagnosticsEnabled()) {
++    if (zbd_->IsMaintenanceDiagnosticsEnabled() || simple_enabled) {
+       diagnostic_after = zbd_->GetZoneResetStates();
+       for (const auto& ext : snapshot.extents_) {
+         diagnostic_covered[ext.zone_start] += ext.length;
+@@ -431,6 +456,58 @@
+       }
+     }
+ 
++    if (simple_enabled) {
++      const size_t original_count = migrate_zones_start.size();
++      uint64_t largest_empty = 0;
++      for (const auto& zone : snapshot.zones_)
++        if (zone.wp == zone.start && zone.used_capacity == 0)
++          largest_empty = std::max(largest_empty, zone.capacity);
++      std::vector<rrzc_simple::Candidate> candidates;
++      for (const auto& zone : snapshot.zones_) {
++        if (!migrate_zones_start.count(zone.start)) continue;
++        rrzc_simple::Candidate c;
++        c.zone = zone.start; c.valid = zone.used_capacity; c.capacity = zone.max_capacity;
++        c.covered = diagnostic_covered[zone.start] == c.valid &&
++                    !diagnostic_non_sst.count(zone.start);
++        c.target_available = largest_empty >= c.valid;
++        auto p = pressure_by_zone.find(zone.start);
++        Zone* live = zbd_->GetIOZone(zone.start);
++        c.pressure_available = pressure_status.ok() && pressure.read_threshold > 0 &&
++            p != pressure_by_zone.end() && live && diagnostic_before.count(zone.start) &&
++            diagnostic_after.count(zone.start) && IsMaintenanceWindowStable(
++                diagnostic_before.at(zone.start), diagnostic_after.at(zone.start), live->GetResetState());
++        if (c.pressure_available) {
++          c.maximum_reads = p->second.max_block_reads;
++          c.threshold = pressure.read_threshold;
++        }
++        candidates.push_back(c);
++        const uint64_t space = c.capacity && c.valid <= c.capacity ?
++            rrzc_simple::Ratio(c.capacity-c.valid, c.capacity) : 0;
++        const uint64_t risk = c.pressure_available ?
++            rrzc_simple::Ratio(std::min(c.maximum_reads, c.threshold), c.threshold) : 0;
++        Info(logger_, "简单双因素候选：Zone=%lu，有效字节=%lu，容量字节=%lu，最大块读数=%lu，读数阈值=%lu，覆盖资格=%d，空目标资格=%d，读压力可用=%d，空间分量ppm=%lu，风险分量ppm=%lu，等权分数ppm=%lu",
++             c.zone, c.valid, c.capacity, c.maximum_reads, c.threshold, c.covered,
++             c.target_available, c.pressure_available, space, risk, (space+risk)/2);
++      }
++      const auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted);
++      if (decision.found) {
++        migrate_zones_start.clear();
++        migrate_zones_start.emplace(decision.selected.zone);
++        Info(logger_, "简单双因素实际集合：模式=%s，原合格区=%zu，实际选中=1，Zone=%lu，回收预算=%lu，实际使用等权=%d，等权分数ppm=%lu",
++             simple_mode, original_count, decision.selected.zone, simple_budget,
++             decision.used_weighted, decision.score_ppm);
++      } else {
++        const bool budget_possible = std::any_of(candidates.begin(), candidates.end(),
++            [&](const rrzc_simple::Candidate& c) {
++              return c.valid <= c.capacity && c.capacity-c.valid >= simple_budget;
++            });
++        if (budget_possible) migrate_zones_start.clear();
++        Info(logger_, "简单双因素实际集合：模式=%s，原合格区=%zu，实际选中=%zu，状态=%s",
++             simple_mode, original_count, migrate_zones_start.size(),
++             budget_possible ? "覆盖或目标未就绪" : "单区预算不可满足，退回原批量策略");
++      }
++    }
++
+     if (test_choice_pending) {
+       const size_t original_count = migrate_zones_start.size();
+       uint64_t expected_used = 0, covered = 0;
+--- /dev/null
++++ b/fs/rrzc_weighted_selector.h
+@@ -0,0 +1,47 @@
++// 简单双因素版本：有效数据与区内最大块读数各占50%，不预测未来。
++#pragma once
++#include <algorithm>
++#include <cstdint>
++#include <vector>
++
++namespace rrzc_simple {
++constexpr uint64_t kScale = 1000000;
++struct Candidate {
++  uint64_t zone = 0, valid = 0, capacity = 0, maximum_reads = 0, threshold = 0;
++  bool covered = false, target_available = false, pressure_available = false;
++};
++struct Decision {
++  bool found = false, used_weighted = false;
++  Candidate selected;
++  uint64_t space_ppm = 0, risk_ppm = 0, score_ppm = 0;
++};
++inline uint64_t Ratio(uint64_t value, uint64_t capacity) {
++  return static_cast<uint64_t>(static_cast<__uint128_t>(value)*kScale/capacity);
++}
++inline bool Eligible(const Candidate& c, uint64_t budget) {
++  return budget > 0 && c.capacity > 0 && c.valid > 0 && c.valid <= c.capacity &&
++         c.covered && c.target_available && c.capacity-c.valid >= budget;
++}
++inline Decision Choose(const std::vector<Candidate>& candidates, uint64_t budget, bool weighted) {
++  Decision result;
++  bool complete_pressure = true;
++  for (const auto& c : candidates)
++    if (Eligible(c, budget) && (!c.pressure_available || c.threshold == 0)) complete_pressure = false;
++  const bool use_weighted = weighted && complete_pressure;
++  for (const auto& c : candidates) {
++    if (!Eligible(c, budget)) continue;
++    const uint64_t space = Ratio(c.capacity-c.valid, c.capacity);
++    const uint64_t risk = c.pressure_available && c.threshold ?
++        Ratio(std::min(c.maximum_reads, c.threshold), c.threshold) : 0;
++    // 分数越大越优先；两个归一化分量相加再除2，即各50%。
++    const uint64_t score = (space+risk)/2;
++    const bool better = !result.found ||
++        (use_weighted && score > result.score_ppm) ||
++        ((!use_weighted || score == result.score_ppm) &&
++         (c.valid < result.selected.valid ||
++          (c.valid == result.selected.valid && c.zone < result.selected.zone)));
++    if (better) result = {true, use_weighted, c, space, risk, score};
++  }
++  return result;
++}
++}  // 命名空间结束。
