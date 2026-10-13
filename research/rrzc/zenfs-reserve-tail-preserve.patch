@@ -1,0 +1,43 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -882,15 +882,34 @@
+       s = IOStatus::NoSpace("迁移片段超过单个预留 Zone 容量");
+     }
+     if (s.ok() && reserved != nullptr && reserved->capacity_ < min_capacity) {
+-      // 不足以容纳下一个片段时结束专用区；无有效数据则直接重置。
++      // 无有效数据可直接重置；有有效数据时先锁定替补，避免白白丢弃尾部。
+       if (!reserved->IsUsed()) {
+         s = reserved->Reset();
+       } else {
+-        s = reserved->Finish();
+-        if (s.ok()) {
+-          s = reserved->CheckRelease();
+-          migration_reserve_zone_ = nullptr;
+-          if (s.ok()) s = EnsureMigrationReserve();
++        Zone *replacement = nullptr;
++        for (auto *zone : io_zones) {
++          if (!zone->Acquire()) continue;
++          if (zone->IsEmpty() && zone->capacity_ >= min_capacity) {
++            replacement = zone;
++            break;
++          }
++          s = zone->CheckRelease();
++          if (!s.ok()) break;
++        }
++        if (s.ok() && replacement != nullptr) {
++          s = reserved->Finish();
++          if (s.ok()) {
++            migration_reserve_zone_ = replacement;
++            s = reserved->CheckRelease();
++            Info(logger_, "迁移预留替换：旧Zone=%lu，新Zone=%lu",
++                 reserved->start_, replacement->start_);
++          } else {
++            auto release_status = replacement->CheckRelease();
++            if (!release_status.ok()) s = release_status;
++          }
++        } else if (s.ok()) {
++          Info(logger_, "迁移预留保留尾部：Zone=%lu，需要=%u，剩余=%lu，无可用替补",
++               reserved->start_, min_capacity, reserved->capacity_);
+         }
+       }
+     }

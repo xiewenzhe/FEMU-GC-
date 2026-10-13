@@ -1,0 +1,114 @@
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -252,6 +252,9 @@
+ 
+   IOStatus TakeMigrateZone(Zone **out_zone, Env::WriteLifeTimeHint lifetime,
+                            uint32_t min_capacity);
++  IOStatus PrepareReadReclaimSource(Zone *zone, uint64_t expected_used,
++                                    uint64_t expected_wp, bool *prepared,
++                                    uint64_t *sacrificed_bytes);
+ 
+   void AddBytesWritten(uint64_t written) { bytes_written_ += written; };
+   void AddGCBytesWritten(uint64_t written) { gc_bytes_written_ += written; };
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -790,6 +790,48 @@
+   return IOStatus::OK();
+ }
+ 
++IOStatus ZonedBlockDevice::PrepareReadReclaimSource(
++    Zone *zone, uint64_t expected_used, uint64_t expected_wp, bool *prepared,
++    uint64_t *sacrificed_bytes) {
++  *prepared = false;
++  *sacrificed_bytes = 0;
++  // 锁顺序与迁移目标管理一致；不等待正在进行的迁移，留待下一轮 RR。
++  std::lock_guard<std::mutex> migrate_lock(migrate_zone_mtx_);
++  if (migrating_) return IOStatus::OK();
++  std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
++  const bool reserved = zone == migration_reserve_zone_;
++  if (!reserved && !zone->Acquire()) return IOStatus::OK();
++  if (expected_used == 0 || zone->IsEmpty() ||
++      zone->used_capacity_ != expected_used || zone->wp_ != expected_wp) {
++    // 专用区的独占权属于预留池，快照失效时必须保留，不能释放给普通写入。
++    return reserved ? IOStatus::OK() : zone->CheckRelease();
++  }
++
++  const bool was_full = zone->IsFull();
++  const uint64_t remaining = was_full ? 0 : zone->capacity_;
++  auto s = was_full ? IOStatus::OK() : zone->Finish();
++  if (!s.ok()) {
++    if (!reserved) {
++      auto release_status = zone->CheckRelease();
++      if (!release_status.ok()) return release_status;
++    }
++    return s;
++  }
++  if (!reserved && !was_full) PutActiveIOZoneToken();
++  if (reserved) migration_reserve_zone_ = nullptr;
++  s = zone->CheckRelease();
++  if (!s.ok()) return s;
++  *sacrificed_bytes = remaining;
++  if (reserved) {
++    Info(logger_, "RR 封闭专用预留源：Zone=%lu，封闭剩余=%lu 字节，不归还普通活跃令牌",
++         zone->start_, remaining);
++    s = EnsureMigrationReserve();
++    if (!s.ok()) return s;
++  }
++  *prepared = true;
++  return IOStatus::OK();
++}
++
+ IOStatus ZonedBlockDevice::ReleaseMigrateZone(Zone *zone) {
+   IOStatus s = IOStatus::OK();
+   {
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -436,23 +436,33 @@
+     }
+     if (migrate_exts.empty()) continue;
+ 
+-    // 先独占并封闭源 Zone，避免新写入使快照失效。
+-    if (!io_zone->Acquire()) continue;
+-    if (io_zone->used_capacity_ != zone_it->used_capacity ||
+-        io_zone->wp_ != zone_it->wp) {
+-      if (!io_zone->Release()) {
++    uint64_t sacrificed_bytes = 0;
++    if (zbd_->IsMigrationReserveEnabled()) {
++      bool prepared = false;
++      s = zbd_->PrepareReadReclaimSource(io_zone, zone_it->used_capacity,
++                                        zone_it->wp, &prepared,
++                                        &sacrificed_bytes);
++      if (!s.ok()) return s;
++      if (!prepared) continue;
++    } else {
++      // 未开启预留时保留原来的源区封闭与令牌路径。
++      if (!io_zone->Acquire()) continue;
++      if (io_zone->used_capacity_ != zone_it->used_capacity ||
++          io_zone->wp_ != zone_it->wp) {
++        if (!io_zone->Release()) {
++          return IOStatus::Corruption("RR 源 Zone 的占用标志释放失败");
++        }
++        continue;
++      }
++      bool was_full = io_zone->IsFull();
++      sacrificed_bytes = was_full ? 0 : io_zone->capacity_;
++      s = was_full ? IOStatus::OK() : io_zone->Finish();
++      bool released = io_zone->Release();
++      if (s.ok() && !was_full) zbd_->PutActiveIOZoneToken();
++      if (!s.ok()) return s;
++      if (!released) {
+         return IOStatus::Corruption("RR 源 Zone 的占用标志释放失败");
+       }
+-      continue;
+-    }
+-    bool was_full = io_zone->IsFull();
+-    uint64_t sacrificed_bytes = was_full ? 0 : io_zone->capacity_;
+-    s = was_full ? IOStatus::OK() : io_zone->Finish();
+-    bool released = io_zone->Release();
+-    if (s.ok() && !was_full) zbd_->PutActiveIOZoneToken();
+-    if (!s.ok()) return s;
+-    if (!released) {
+-      return IOStatus::Corruption("RR 源 Zone 的占用标志释放失败");
+     }
+ 
+     Info(logger_, "RR 开始：Zone %lu，达阈值物理块 %u，有效数据 %lu 字节，封闭剩余容量 %lu 字节",
