@@ -1,0 +1,7 @@
+# 原始实验数据、镜像及构建产物留在本地；汇总证据按明确文件名单提交。
+/results/
+__pycache__/
+*.qcow2
+*.img
+# 根目录忽略 Markdown；此处保留研究记录。
+!README.md
