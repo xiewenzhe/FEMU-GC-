@@ -1147,7 +1147,28 @@ enum NvmeLogIdentifier {
     NVME_LOG_CHANGED_ZONE_LIST  = 0xbf,
     NVME_LOG_SANITIZE           = 0x81,
     NVME_LOG_FEMU_STATS         = 0xc0,
+    NVME_LOG_ZNS_RR_STATS       = 0xc1,
 };
+
+/* 厂商自定义 C1h 日志页按 ZNS 命名空间提供，所有整数字段均为小端序。 */
+typedef struct QEMU_PACKED ZnsRrLogHeader {
+    uint32_t version;
+    uint32_t entry_size;
+    uint32_t nr_zones;
+    uint32_t blocks_per_zone;
+    uint64_t read_threshold;
+    uint64_t rsvd;
+} ZnsRrLogHeader;
+
+typedef struct QEMU_PACKED ZnsRrZoneEntry {
+    uint64_t zslba;
+    uint64_t max_block_reads;
+    uint64_t sum_block_reads;
+    uint32_t blocks_ge_80pct;
+    uint32_t blocks_ge_90pct;
+    uint32_t blocks_at_threshold;
+    uint32_t rsvd;
+} ZnsRrZoneEntry;
 
 /* LID Supported and Effects data structure, one per log page identifier */
 enum NvmeLidSupport {
@@ -1959,6 +1980,7 @@ typedef struct ZNSCtrlParams {
     uint8_t  zns_num_plane;
     uint8_t  zns_num_blk;
     int zns_flash_type;
+    uint64_t zns_rr_threshold; /* 主机端 RR 使用的物理块读取阈值；0 表示关闭计数 */
     /*
      * Optional ZNS resource limits, all 0 = unlimited (spec MAR/MOR "no limit",
      * no zone-descriptor extension). Non-zero activates the already-present

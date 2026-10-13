@@ -98,6 +98,7 @@ struct zns_blk {
     int nand_type;
     uint64_t next_blk_avail_time;
     uint64_t page_wp; //next free page
+    uint64_t read_count; /* 自上次擦除以来的 NAND 读取次数，通过日志页上报 */
 };
 
 struct zns_plane{
@@ -147,6 +148,7 @@ struct zns_ssd {
     uint64_t num_plane;
     uint64_t num_blk;
     uint64_t num_page;
+    uint64_t rr_threshold; /* 0 表示关闭读干扰计数 */
 
     struct zns_ch *ch;
     struct write_pointer wp;

@@ -324,6 +324,7 @@ static void zns_reset_block_state(struct zns_ssd *zns, uint32_t zone_idx)
                 }
                 blk = get_blk(zns, &ppa);
                 blk->page_wp = 0;
+                qatomic_set(&blk->read_count, 0);
             }
         }
     }
@@ -422,6 +423,9 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
         srd.stime = req->stime;
 
         sublat = zns_advance_status(zns, &ppa, &srd);
+        if (zns->rr_threshold) {
+            qatomic_inc(&get_blk(zns, &ppa)->read_count);
+        }
         ftl_debug("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }

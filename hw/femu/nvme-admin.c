@@ -1919,6 +1919,7 @@ static uint16_t nvme_supported_log_pages(FemuCtrl *n, NvmeCmd *cmd,
     /* a command set's own pages are listed for that command set only */
     if (zoned && csi == NVME_CSI_ZONED) {
         lids[NVME_LOG_CHANGED_ZONE_LIST] = cpu_to_le32(NVME_LIDS_LSUPP);
+        lids[NVME_LOG_ZNS_RR_STATS] = cpu_to_le32(NVME_LIDS_LSUPP);
     }
 
     trans_len = MIN(sizeof(lids) - off, buf_len);

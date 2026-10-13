@@ -1935,6 +1935,7 @@ static void zns_init_params(FemuCtrl *n, NvmeNamespace *ns)
     id_zns->num_page = ns->size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
     id_zns->lbasz = 1 << zns_ns_lbads(ns);
     id_zns->flash_type = n->zns_params.zns_flash_type;
+    id_zns->rr_threshold = n->zns_params.zns_rr_threshold;
 
     /*
      * A zone spans chnls_per_zone channels; unset (or the full count) keeps the
@@ -2326,10 +2327,80 @@ static uint16_t zns_changed_zone_list(FemuCtrl *n, NvmeNamespace *ns,
     return status;
 }
 
+/* C1h 上报物理块读取压力，不暴露或改变 PPA 映射。 */
+static uint16_t zns_rr_stats_log(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
+                                 uint32_t len, uint64_t off)
+{
+    struct zns_ssd *zns = ns->zns;
+    const size_t log_size = sizeof(ZnsRrLogHeader) +
+                            (size_t)ns->num_zones * sizeof(ZnsRrZoneEntry);
+    ZnsRrLogHeader *hdr;
+    ZnsRrZoneEntry *entries;
+    uint8_t *log;
+    uint32_t zone_idx;
+    uint16_t status;
+
+    if (off >= log_size) {
+        return NVME_INVALID_FIELD | NVME_DNR;
+    }
+
+    log = g_malloc0(log_size);
+    hdr = (ZnsRrLogHeader *)log;
+    entries = (ZnsRrZoneEntry *)(log + sizeof(*hdr));
+    hdr->version = cpu_to_le32(1);
+    hdr->entry_size = cpu_to_le32(sizeof(*entries));
+    hdr->nr_zones = cpu_to_le32(ns->num_zones);
+    hdr->blocks_per_zone = cpu_to_le32(zns->chnls_per_zone * zns->num_lun *
+                                       zns->num_plane);
+    hdr->read_threshold = cpu_to_le64(zns->rr_threshold);
+
+    for (zone_idx = 0; zone_idx < ns->num_zones; zone_idx++) {
+        uint64_t groups = zns->num_ch / zns->chnls_per_zone;
+        uint32_t blk_idx = zone_idx / groups;
+        uint32_t ch_lo = (zone_idx % groups) * zns->chnls_per_zone;
+        uint32_t ch_hi = ch_lo + zns->chnls_per_zone;
+        uint64_t max_reads = 0, sum_reads = 0;
+        uint32_t ge80 = 0, ge90 = 0, at_threshold = 0;
+        uint32_t ch, lun, pl;
+
+        for (ch = ch_lo; ch < ch_hi; ch++) {
+            for (lun = 0; lun < zns->num_lun; lun++) {
+                for (pl = 0; pl < zns->num_plane; pl++) {
+                    uint64_t reads = qatomic_read(&zns->ch[ch].fc[lun]
+                                                        .plane[pl].blk[blk_idx]
+                                                        .read_count);
+
+                    max_reads = MAX(max_reads, reads);
+                    sum_reads += reads;
+                    if (zns->rr_threshold) {
+                        ge80 += reads >= zns->rr_threshold -
+                                          zns->rr_threshold / 5;
+                        ge90 += reads >= zns->rr_threshold -
+                                          zns->rr_threshold / 10;
+                        at_threshold += reads >= zns->rr_threshold;
+                    }
+                }
+            }
+        }
+
+        entries[zone_idx].zslba = cpu_to_le64(ns->zone_array[zone_idx].d.zslba);
+        entries[zone_idx].max_block_reads = cpu_to_le64(max_reads);
+        entries[zone_idx].sum_block_reads = cpu_to_le64(sum_reads);
+        entries[zone_idx].blocks_ge_80pct = cpu_to_le32(ge80);
+        entries[zone_idx].blocks_ge_90pct = cpu_to_le32(ge90);
+        entries[zone_idx].blocks_at_threshold = cpu_to_le32(at_threshold);
+    }
+
+    status = dma_read_prp(n, log + off, MIN((size_t)len, log_size - off),
+                          le64_to_cpu(cmd->dptr.prp1),
+                          le64_to_cpu(cmd->dptr.prp2));
+    g_free(log);
+    return status;
+}
+
 /*
- * Get Log Page for a zoned namespace. Only the Changed Zone List is namespace
- * specific here; every other identifier is answered by the generic handler that
- * called us.
+ * 处理 ZNS 命名空间的日志页请求。变更 Zone 列表和 FEMU 读取压力页按命名空间提供；
+ * 其他日志页由上层通用处理函数负责。
  */
 static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
 {
@@ -2346,11 +2417,12 @@ static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
     uint32_t len = (((numdu << 16) | numdl) + 1) << 2;
     NvmeNamespace *ns;
 
-    if (lid != NVME_LOG_CHANGED_ZONE_LIST) {
+    if (lid != NVME_LOG_CHANGED_ZONE_LIST &&
+        lid != NVME_LOG_ZNS_RR_STATS) {
         return NVME_INVALID_LOG_ID | NVME_DNR;
     }
-    /* the log is a list of 8 byte ZSLBAs, so the offset must be 8 byte aligned */
-    if (off & 0x7) {
+    /* 变更 Zone 列表的日志偏移量必须按 8 字节对齐。 */
+    if (lid == NVME_LOG_CHANGED_ZONE_LIST && (off & 0x7)) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
     /* the list is per namespace, so the broadcast identifier has no meaning */
@@ -2363,6 +2435,9 @@ static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
         return NVME_INVALID_FIELD | NVME_DNR;
     }
 
+    if (lid == NVME_LOG_ZNS_RR_STATS) {
+        return zns_rr_stats_log(n, ns, cmd, len, off);
+    }
     return zns_changed_zone_list(n, ns, cmd, len, off, rae);
 }
 
