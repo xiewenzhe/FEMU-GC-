@@ -1,0 +1,208 @@
+diff --git a/fs/zbd_zenfs.cc b/fs/zbd_zenfs.cc
+index b991597..23ccd7d 100644
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -838,6 +838,11 @@ uint64_t ZonedBlockDevice::GetZoneSize() { return zbd_be_->GetZoneSize(); }
+ 
+ uint32_t ZonedBlockDevice::GetNrZones() { return zbd_be_->GetNrZones(); }
+ 
++IOStatus ZonedBlockDevice::GetZoneReadPressure(
++    ZoneReadPressureReport *report) {
++  return zbd_be_->GetZoneReadPressure(report);
++}
++
+ void ZonedBlockDevice::EncodeJsonZone(std::ostream &json_stream,
+                                       const std::vector<Zone *> zones) {
+   bool first_element = true;
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+index c371109..5c911d3 100644
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -33,6 +33,21 @@ namespace ROCKSDB_NAMESPACE {
+ 
+ class ZonedBlockDevice;
+ class ZonedBlockDeviceBackend;
++
++struct ZoneReadPressure {
++  uint64_t start = 0;
++  uint64_t max_block_reads = 0;
++  uint64_t sum_block_reads = 0;
++  uint32_t blocks_ge_80pct = 0;
++  uint32_t blocks_ge_90pct = 0;
++  uint32_t blocks_at_threshold = 0;
++};
++
++struct ZoneReadPressureReport {
++  uint64_t read_threshold = 0;
++  uint32_t blocks_per_zone = 0;
++  std::vector<ZoneReadPressure> zones;
++};
+ class ZoneSnapshot;
+ class ZenFSSnapshotOptions;
+ 
+@@ -128,6 +143,9 @@ class ZonedBlockDeviceBackend {
+   virtual uint64_t ZoneWp(std::unique_ptr<ZoneList> &zones,
+                           unsigned int idx) = 0;
+   virtual std::string GetFilename() = 0;
++  virtual IOStatus GetZoneReadPressure(ZoneReadPressureReport *) {
++    return IOStatus::NotSupported("无法获取物理块读取压力");
++  }
+   uint32_t GetBlockSize() { return block_sz_; };
+   uint64_t GetZoneSize() { return zone_sz_; };
+   uint32_t GetNrZones() { return nr_zones_; };
+@@ -200,6 +218,7 @@ class ZonedBlockDevice {
+ 
+   uint64_t GetZoneSize();
+   uint32_t GetNrZones();
++  IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
+   std::vector<Zone *> GetMetaZones() { return meta_zones; }
+ 
+   void SetFinishTreshold(uint32_t threshold) { finish_threshold_ = threshold; }
+diff --git a/fs/zbdlib_zenfs.cc b/fs/zbdlib_zenfs.cc
+index 2ad44e7..04d97a8 100644
+--- a/fs/zbdlib_zenfs.cc
++++ b/fs/zbdlib_zenfs.cc
+@@ -9,10 +9,13 @@
+ #include "zbdlib_zenfs.h"
+ 
+ #include <errno.h>
++#include <endian.h>
+ #include <fcntl.h>
+ #include <libzbd/zbd.h>
++#include <linux/nvme_ioctl.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/ioctl.h>
+ #include <unistd.h>
+ 
+ #include <fstream>
+@@ -23,6 +26,56 @@
+ 
+ namespace ROCKSDB_NAMESPACE {
+ 
++namespace {
++
++constexpr uint8_t kFemuReadPressureLog = 0xc1;
++
++struct __attribute__((packed)) ReadPressureLogHeader {
++  uint32_t version;
++  uint32_t entry_size;
++  uint32_t nr_zones;
++  uint32_t blocks_per_zone;
++  uint64_t read_threshold;
++  uint64_t reserved;
++};
++
++struct __attribute__((packed)) ReadPressureLogEntry {
++  uint64_t zslba;
++  uint64_t max_block_reads;
++  uint64_t sum_block_reads;
++  uint32_t blocks_ge_80pct;
++  uint32_t blocks_ge_90pct;
++  uint32_t blocks_at_threshold;
++  uint32_t reserved;
++};
++
++static_assert(sizeof(ReadPressureLogHeader) == 32, "C1h 日志头长度异常");
++static_assert(sizeof(ReadPressureLogEntry) == 40, "C1h 日志条目长度异常");
++
++IOStatus ReadPressureLog(int fd, uint32_t nsid, void *data, uint32_t len) {
++  nvme_admin_cmd cmd = {};
++  uint32_t dwords = len / 4 - 1;
++  cmd.opcode = 0x02;  // 获取日志页
++  cmd.nsid = nsid;
++  cmd.addr = reinterpret_cast<uint64_t>(data);
++  cmd.data_len = len;
++  cmd.cdw10 = ((dwords & 0xffff) << 16) | kFemuReadPressureLog;
++  cmd.cdw11 = dwords >> 16;
++
++  int ret = ioctl(fd, NVME_IOCTL_ADMIN_CMD, &cmd);
++  if (ret < 0) {
++    return IOStatus::IOError("读取 FEMU 物理块读取压力日志失败：" +
++                             std::string(strerror(errno)));
++  }
++  if (ret != 0) {
++    return IOStatus::IOError("读取 FEMU 物理块读取压力日志的 NVMe 状态码：" +
++                             std::to_string(ret));
++  }
++  return IOStatus::OK();
++}
++
++}  // 匿名命名空间
++
+ ZbdlibBackend::ZbdlibBackend(std::string bdevname)
+     : filename_("/dev/" + bdevname),
+       read_f_(-1),
+@@ -109,6 +162,60 @@ IOStatus ZbdlibBackend::Open(bool readonly, bool exclusive,
+   return IOStatus::OK();
+ }
+ 
++IOStatus ZbdlibBackend::GetZoneReadPressure(ZoneReadPressureReport *report) {
++  int nsid = ioctl(read_f_, NVME_IOCTL_ID);
++  if (nsid <= 0) {
++    return IOStatus::NotSupported("读取压力接口要求使用 NVMe 命名空间");
++  }
++
++  ReadPressureLogHeader header = {};
++  IOStatus s = ReadPressureLog(read_f_, nsid, &header, sizeof(header));
++  if (!s.ok()) return s;
++  if (le32toh(header.version) != 1 ||
++      le32toh(header.entry_size) != sizeof(ReadPressureLogEntry) ||
++      le32toh(header.nr_zones) != nr_zones_) {
++    return IOStatus::Corruption("FEMU 读取压力日志格式异常");
++  }
++
++  std::vector<uint8_t> bytes(sizeof(header) +
++                             nr_zones_ * sizeof(ReadPressureLogEntry));
++  s = ReadPressureLog(read_f_, nsid, bytes.data(), bytes.size());
++  if (!s.ok()) return s;
++
++  const auto *full_header =
++      reinterpret_cast<const ReadPressureLogHeader *>(bytes.data());
++  if (le32toh(full_header->version) != 1 ||
++      le32toh(full_header->entry_size) != sizeof(ReadPressureLogEntry) ||
++      le32toh(full_header->nr_zones) != nr_zones_) {
++    return IOStatus::Corruption("读取期间 FEMU 读取压力日志格式发生变化");
++  }
++
++  ZoneReadPressureReport result;
++  result.read_threshold = le64toh(full_header->read_threshold);
++  result.blocks_per_zone = le32toh(full_header->blocks_per_zone);
++  const auto *entries = reinterpret_cast<const ReadPressureLogEntry *>(
++      bytes.data() + sizeof(ReadPressureLogHeader));
++  result.zones.reserve(nr_zones_);
++  for (uint32_t i = 0; i < nr_zones_; ++i) {
++    const auto &entry = entries[i];
++    ZoneReadPressure zone;
++    // C1h 条目按命名空间内的 Zone 顺序排列；zone_sz_ 的单位是字节。
++    zone.start = static_cast<uint64_t>(i) * zone_sz_;
++    zone.max_block_reads = le64toh(entry.max_block_reads);
++    zone.sum_block_reads = le64toh(entry.sum_block_reads);
++    zone.blocks_ge_80pct = le32toh(entry.blocks_ge_80pct);
++    zone.blocks_ge_90pct = le32toh(entry.blocks_ge_90pct);
++    zone.blocks_at_threshold = le32toh(entry.blocks_at_threshold);
++    if (i == 0 && le64toh(entry.zslba) != 0) {
++      return IOStatus::Corruption("FEMU 读取压力日志中的首个 Zone 异常");
++    }
++    result.zones.emplace_back(zone);
++  }
++
++  *report = std::move(result);
++  return IOStatus::OK();
++}
++
+ std::unique_ptr<ZoneList> ZbdlibBackend::ListZones() {
+   int ret;
+   void *zones;
+diff --git a/fs/zbdlib_zenfs.h b/fs/zbdlib_zenfs.h
+index 856c279..3881900 100644
+--- a/fs/zbdlib_zenfs.h
++++ b/fs/zbdlib_zenfs.h
+@@ -83,6 +83,7 @@ class ZbdlibBackend : public ZonedBlockDeviceBackend {
+   };
+ 
+   std::string GetFilename() { return filename_; }
++  IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
+ 
+  private:
+   IOStatus CheckScheduler();

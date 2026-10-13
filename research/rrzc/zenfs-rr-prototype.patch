@@ -1,0 +1,650 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index c41c247..1b68e54 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -16,6 +16,8 @@
+ #include <string.h>
+ #include <unistd.h>
+ 
++#include <algorithm>
++#include <map>
+ #include <set>
+ #include <sstream>
+ #include <utility>
+@@ -273,6 +275,15 @@ void ZenFS::GCWorker() {
+   while (run_gc_worker_) {
+     usleep(1000 * 1000 * 10);
+ 
++    if (!run_gc_worker_) break;
++    if (rr_enabled_) {
++      IOStatus rr_status = ReadReclaimOneZone();
++      if (!rr_status.ok()) {
++        Error(logger_, "主机端 RR 检查失败：%s", rr_status.ToString().c_str());
++      }
++    }
++    if (!superblock_->IsGCEnabled()) continue;
++
+     uint64_t non_free = zbd_->GetUsedSpace() + zbd_->GetReclaimableSpace();
+     uint64_t free = zbd_->GetFreeSpace();
+     uint64_t free_percent = (100 * free) / (free + non_free);
+@@ -288,13 +299,38 @@ void ZenFS::GCWorker() {
+     GetZenFSSnapshot(snapshot, options);
+ 
+     uint64_t threshold = (100 - GC_SLOPE * (GC_START_LEVEL - free_percent));
++    ZoneReadPressureReport pressure;
++    IOStatus pressure_status = zbd_->GetZoneReadPressure(&pressure);
++    std::map<uint64_t, ZoneReadPressure> pressure_by_zone;
++    if (pressure_status.ok()) {
++      for (const auto& entry : pressure.zones) {
++        pressure_by_zone.emplace(entry.start, entry);
++      }
++    } else {
++      Info(logger_, "ZC 候选区读压力不可用：%s",
++           pressure_status.ToString().c_str());
++    }
+     std::set<uint64_t> migrate_zones_start;
+     for (const auto& zone : snapshot.zones_) {
+       if (zone.capacity == 0) {
+         uint64_t garbage_percent_approx =
+             100 - 100 * zone.used_capacity / zone.max_capacity;
+-        if (garbage_percent_approx > threshold &&
+-            garbage_percent_approx < 100) {
++        bool selected = garbage_percent_approx > threshold &&
++                        garbage_percent_approx < 100;
++        auto pressure_it = pressure_by_zone.find(zone.start);
++        if (pressure_it != pressure_by_zone.end()) {
++          const auto& p = pressure_it->second;
++          Info(logger_, "ZC 候选：Zone %lu，无效比例 %lu%%，有效数据 %lu 字节，阈值 %lu，最大读数 %lu，读数总和 %lu，风险块 80%%/90%%/100%%=%u/%u/%u，选中 %d",
++               zone.start, garbage_percent_approx, zone.used_capacity,
++               pressure.read_threshold, p.max_block_reads, p.sum_block_reads,
++               p.blocks_ge_80pct, p.blocks_ge_90pct,
++               p.blocks_at_threshold, selected);
++        } else {
++          Info(logger_, "ZC 候选：Zone %lu，无效比例 %lu%%，有效数据 %lu 字节，读压力未知，选中 %d",
++               zone.start, garbage_percent_approx, zone.used_capacity,
++               selected);
++        }
++        if (selected) {
+           migrate_zones_start.emplace(zone.start);
+         }
+       }
+@@ -310,16 +346,115 @@ void ZenFS::GCWorker() {
+ 
+     if (migrate_exts.size() > 0) {
+       IOStatus s;
+-      Info(logger_, "Garbage collecting %d extents \n",
+-           (int)migrate_exts.size());
+-      s = MigrateExtents(migrate_exts);
++      MigrationStats stats;
++      ++zc_rounds_;
++      s = MigrateExtents(migrate_exts, &stats);
++      zc_migrated_bytes_ += stats.migrated_bytes;
++      zc_reset_zones_ += stats.reset_zones;
++      Info(logger_, "ZC 统计：轮次 %lu，本轮迁移 %lu 字节，本轮重置 %lu 个 Zone，累计迁移 %lu 字节，累计重置 %lu 个 Zone",
++           zc_rounds_, stats.migrated_bytes, stats.reset_zones,
++           zc_migrated_bytes_, zc_reset_zones_);
+       if (!s.ok()) {
+-        Error(logger_, "Garbage collection failed");
++        Error(logger_, "ZC 迁移失败：%s", s.ToString().c_str());
+       }
+     }
+   }
+ }
+ 
++IOStatus ZenFS::ReadReclaimOneZone() {
++  ZoneReadPressureReport pressure;
++  IOStatus s = zbd_->GetZoneReadPressure(&pressure);
++  if (!s.ok()) return s;
++  if (pressure.read_threshold == 0) return IOStatus::OK();
++
++  ZenFSSnapshot snapshot;
++  ZenFSSnapshotOptions options;
++  options.zone_ = 1;
++  options.zone_file_ = 1;
++  GetZenFSSnapshot(snapshot, options);
++
++  std::map<uint64_t, uint64_t> covered_bytes;
++  std::set<uint64_t> non_sst_zones;
++  for (const auto& ext : snapshot.extents_) {
++    covered_bytes[ext.zone_start] += ext.length;
++    if (ext.filename.size() < 4 ||
++        ext.filename.compare(ext.filename.size() - 4, 4, ".sst") != 0) {
++      non_sst_zones.emplace(ext.zone_start);
++    }
++  }
++
++  for (const auto& zone_pressure : pressure.zones) {
++    if (zone_pressure.blocks_at_threshold == 0) continue;
++    Zone* io_zone = zbd_->GetIOZone(zone_pressure.start);
++    if (io_zone == nullptr) continue;
++
++    auto zone_it = std::find_if(snapshot.zones_.begin(), snapshot.zones_.end(),
++                                [&](const ZoneSnapshot& zone) {
++                                  return zone.start == zone_pressure.start;
++                                });
++    if (zone_it == snapshot.zones_.end() || zone_it->used_capacity == 0 ||
++        zone_it->wp == zone_it->start) {
++      continue;
++    }
++
++    // 快照未覆盖所有有效数据时，不允许对该 Zone 执行 RR 迁移。
++    if (covered_bytes[zone_it->start] != zone_it->used_capacity ||
++        non_sst_zones.count(zone_it->start) != 0) {
++      Info(logger_, "RR 延后：Zone %lu 含未覆盖或非 SST 的有效数据",
++           zone_it->start);
++      continue;
++    }
++
++    std::vector<ZoneExtentSnapshot*> migrate_exts;
++    for (auto& ext : snapshot.extents_) {
++      if (ext.zone_start == zone_it->start) migrate_exts.push_back(&ext);
++    }
++    if (migrate_exts.empty()) continue;
++
++    // 先独占并封闭源 Zone，避免新写入使快照失效。
++    if (!io_zone->Acquire()) continue;
++    if (io_zone->used_capacity_ != zone_it->used_capacity ||
++        io_zone->wp_ != zone_it->wp) {
++      if (!io_zone->Release()) {
++        return IOStatus::Corruption("RR 源 Zone 的占用标志释放失败");
++      }
++      continue;
++    }
++    bool was_full = io_zone->IsFull();
++    uint64_t sacrificed_bytes = was_full ? 0 : io_zone->capacity_;
++    s = was_full ? IOStatus::OK() : io_zone->Finish();
++    bool released = io_zone->Release();
++    if (s.ok() && !was_full) zbd_->PutActiveIOZoneToken();
++    if (!s.ok()) return s;
++    if (!released) {
++      return IOStatus::Corruption("RR 源 Zone 的占用标志释放失败");
++    }
++
++    Info(logger_, "RR 开始：Zone %lu，达阈值物理块 %u，有效数据 %lu 字节，封闭剩余容量 %lu 字节",
++         zone_it->start, zone_pressure.blocks_at_threshold,
++         zone_it->used_capacity, sacrificed_bytes);
++    MigrationStats stats;
++    ++rr_attempts_;
++    s = MigrateExtents(migrate_exts, &stats);
++    rr_migrated_bytes_ += stats.migrated_bytes;
++    Info(logger_, "RR 统计：尝试 %lu 次，本次迁移 %lu 字节，本次重置 %lu 个 Zone，累计迁移 %lu 字节",
++         rr_attempts_, stats.migrated_bytes, stats.reset_zones,
++         rr_migrated_bytes_);
++    if (!s.ok()) return s;
++    if (io_zone->IsEmpty()) {
++      ++rr_completed_zones_;
++      Info(logger_, "RR 完成：Zone %lu 已重置，累计完成 %lu 次",
++           zone_it->start, rr_completed_zones_);
++    } else {
++      Info(logger_, "RR 未完成：Zone %lu 尚有有效数据，未重置",
++           zone_it->start);
++    }
++    return IOStatus::OK();
++  }
++
++  return IOStatus::OK();
++}
++
+ IOStatus ZenFS::Repair() {
+   std::map<std::string, std::shared_ptr<ZoneFile>>::iterator it;
+   for (it = files_.begin(); it != files_.end(); it++) {
+@@ -1481,8 +1616,11 @@ Status ZenFS::Mount(bool readonly) {
+     if (!status.ok()) return status;
+     Info(logger_, "  Done");
+ 
+-    if (superblock_->IsGCEnabled()) {
+-      Info(logger_, "Starting garbage collection worker");
++    const char* rr_env = getenv("ZENFS_RR_ENABLE");
++    rr_enabled_ = rr_env != nullptr && strcmp(rr_env, "1") == 0;
++    if (superblock_->IsGCEnabled() || rr_enabled_) {
++      Info(logger_, "启动 Zone 维护线程：GC=%d，主机端 RR=%d",
++           superblock_->IsGCEnabled(), rr_enabled_);
+       run_gc_worker_ = true;
+       gc_worker_.reset(new std::thread(&ZenFS::GCWorker, this));
+     }
+@@ -1745,56 +1883,71 @@ void ZenFS::GetZenFSSnapshot(ZenFSSnapshot& snapshot,
+ }
+ 
+ IOStatus ZenFS::MigrateExtents(
+-    const std::vector<ZoneExtentSnapshot*>& extents) {
++    const std::vector<ZoneExtentSnapshot*>& extents, MigrationStats* stats) {
+   IOStatus s;
+   // Group extents by their filename
+   std::map<std::string, std::vector<ZoneExtentSnapshot*>> file_extents;
++  std::set<uint64_t> source_zones;
+   for (auto* ext : extents) {
+     std::string fname = ext->filename;
+     // We only migrate SST file extents
+     if (ends_with(fname, ".sst")) {
+       file_extents[fname].emplace_back(ext);
++      source_zones.emplace(ext->zone_start);
++    }
++  }
++  for (auto it = source_zones.begin(); it != source_zones.end();) {
++    Zone* zone = zbd_->GetIOZone(*it);
++    if (zone == nullptr || zone->IsEmpty()) {
++      it = source_zones.erase(it);
++    } else {
++      ++it;
+     }
+   }
+ 
+   for (const auto& it : file_extents) {
+-    s = MigrateFileExtents(it.first, it.second);
++    s = MigrateFileExtents(it.first, it.second, stats);
+     if (!s.ok()) break;
+     s = zbd_->ResetUnusedIOZones();
+     if (!s.ok()) break;
+   }
++  for (uint64_t start : source_zones) {
++    Zone* zone = zbd_->GetIOZone(start);
++    if (zone != nullptr && zone->IsEmpty()) ++stats->reset_zones;
++  }
+   return s;
+ }
+ 
+ IOStatus ZenFS::MigrateFileExtents(
+     const std::string& fname,
+-    const std::vector<ZoneExtentSnapshot*>& migrate_exts) {
++    const std::vector<ZoneExtentSnapshot*>& migrate_exts,
++    MigrationStats* stats) {
+   IOStatus s = IOStatus::OK();
+   Info(logger_, "MigrateFileExtents, fname: %s, extent count: %lu",
+        fname.data(), migrate_exts.size());
+ 
+-  // The file may be deleted by other threads, better double check.
++  // 文件可能被其他线程删除，迁移前先确认其仍然存在。
+   auto zfile = GetFile(fname);
+   if (zfile == nullptr) {
+     return IOStatus::OK();
+   }
+ 
+-  // Don't migrate open for write files and prevent write reopens while we
+-  // migrate
++  // 不迁移正在写入的文件，并在迁移期间阻止该文件再次打开进行写入。
+   if (!zfile->TryAcquireWRLock()) {
+     return IOStatus::OK();
+   }
+ 
+   std::vector<ZoneExtent*> new_extent_list;
+   std::vector<ZoneExtent*> extents = zfile->GetExtents();
++  bool changed = false;
+   for (const auto* ext : extents) {
+     new_extent_list.push_back(
+         new ZoneExtent(ext->start_, ext->length_, ext->zone_));
+   }
+ 
+-  // Modify the new extent list
++  // 仅修改复制出的数据片段列表。
+   for (ZoneExtent* ext : new_extent_list) {
+-    // Check if current extent need to be migrated
++    // 检查当前数据片段是否属于待迁移范围。
+     auto it = std::find_if(migrate_exts.begin(), migrate_exts.end(),
+                            [&](const ZoneExtentSnapshot* ext_snapshot) {
+                              return ext_snapshot->start == ext->start_ &&
+@@ -1808,36 +1961,44 @@ IOStatus ZenFS::MigrateFileExtents(
+ 
+     Zone* target_zone = nullptr;
+ 
+-    // Allocate a new migration zone.
++    // 获取迁移目标 Zone。
+     s = zbd_->TakeMigrateZone(&target_zone, zfile->GetWriteLifeTimeHint(),
+                               ext->length_);
+     if (!s.ok()) {
+-      continue;
++      break;
+     }
+ 
+     if (target_zone == nullptr) {
+-      zbd_->ReleaseMigrateZone(target_zone);
+-      Info(logger_, "Migrate Zone Acquire Failed, Ignore Task.");
+-      continue;
++      s = IOStatus::NoSpace("没有可用的迁移目标 Zone");
++      break;
+     }
+ 
+     uint64_t target_start = target_zone->wp_;
+     if (zfile->IsSparse()) {
+-      // For buffered write, ZenFS use inlined metadata for extents and each
+-      // extent has a SPARSE_HEADER_SIZE.
++      // 缓冲写入的数据片段包含 SPARSE_HEADER_SIZE 字节的内联元数据。
+       target_start = target_zone->wp_ + ZoneFile::SPARSE_HEADER_SIZE;
+-      zfile->MigrateData(ext->start_ - ZoneFile::SPARSE_HEADER_SIZE,
+-                         ext->length_ + ZoneFile::SPARSE_HEADER_SIZE,
+-                         target_zone);
+-      zbd_->AddGCBytesWritten(ext->length_ + ZoneFile::SPARSE_HEADER_SIZE);
++      s = zfile->MigrateData(ext->start_ - ZoneFile::SPARSE_HEADER_SIZE,
++                             ext->length_ + ZoneFile::SPARSE_HEADER_SIZE,
++                             target_zone);
++      if (s.ok()) {
++        zbd_->AddGCBytesWritten(ext->length_ + ZoneFile::SPARSE_HEADER_SIZE);
++        stats->migrated_bytes += ext->length_ + ZoneFile::SPARSE_HEADER_SIZE;
++      }
+     } else {
+-      zfile->MigrateData(ext->start_, ext->length_, target_zone);
+-      zbd_->AddGCBytesWritten(ext->length_);
++      s = zfile->MigrateData(ext->start_, ext->length_, target_zone);
++      if (s.ok()) {
++        zbd_->AddGCBytesWritten(ext->length_);
++        stats->migrated_bytes += ext->length_;
++      }
++    }
++    if (!s.ok()) {
++      zbd_->ReleaseMigrateZone(target_zone);
++      break;
+     }
+ 
+-    // If the file doesn't exist, skip
+-    if (GetFileNoLock(fname) == nullptr) {
+-      Info(logger_, "Migrate file not exist anymore.");
++    // 文件可能在迁移期间被删除，此时不更新原文件的映射。
++    if (GetFile(fname).get() != zfile.get()) {
++      s = IOStatus::NotFound("迁移期间文件已被删除");
+       zbd_->ReleaseMigrateZone(target_zone);
+       break;
+     }
+@@ -1845,16 +2006,26 @@ IOStatus ZenFS::MigrateFileExtents(
+     ext->start_ = target_start;
+     ext->zone_ = target_zone;
+     ext->zone_->used_capacity_ += ext->length_;
++    changed = true;
+ 
+-    zbd_->ReleaseMigrateZone(target_zone);
++    IOStatus release_status = zbd_->ReleaseMigrateZone(target_zone);
++    if (!release_status.ok()) {
++      s = release_status;
++      break;
++    }
+   }
+ 
+-  SyncFileExtents(zfile.get(), new_extent_list);
++  if (changed) {
++    IOStatus sync_status = SyncFileExtents(zfile.get(), new_extent_list);
++    if (!sync_status.ok()) s = sync_status;
++  } else {
++    for (auto* ext : new_extent_list) delete ext;
++  }
+   zfile->ReleaseWRLock();
+ 
+   Info(logger_, "MigrateFileExtents Finished, fname: %s, extent count: %lu",
+        fname.data(), migrate_exts.size());
+-  return IOStatus::OK();
++  return s;
+ }
+ 
+ extern "C" FactoryFunc<FileSystem> zenfs_filesystem_reg;
+diff --git a/fs/fs_zenfs.h b/fs/fs_zenfs.h
+index dd28f28..e53abc1 100644
+--- a/fs/fs_zenfs.h
++++ b/fs/fs_zenfs.h
+@@ -148,6 +148,18 @@ class ZenFS : public FileSystemWrapper {
+ 
+   std::unique_ptr<std::thread> gc_worker_ = nullptr;
+   bool run_gc_worker_ = false;
++  bool rr_enabled_ = false;
++  uint64_t rr_completed_zones_ = 0;
++  uint64_t rr_attempts_ = 0;
++  uint64_t rr_migrated_bytes_ = 0;
++  uint64_t zc_rounds_ = 0;
++  uint64_t zc_reset_zones_ = 0;
++  uint64_t zc_migrated_bytes_ = 0;
++
++  struct MigrationStats {
++    uint64_t migrated_bytes = 0;
++    uint64_t reset_zones = 0;
++  };
+ 
+   struct ZenFSMetadataWriter : public MetadataWriter {
+     ZenFS* zenFS;
+@@ -452,17 +464,20 @@ class ZenFS : public FileSystemWrapper {
+   void GetZenFSSnapshot(ZenFSSnapshot& snapshot,
+                         const ZenFSSnapshotOptions& options);
+ 
+-  IOStatus MigrateExtents(const std::vector<ZoneExtentSnapshot*>& extents);
++  IOStatus MigrateExtents(const std::vector<ZoneExtentSnapshot*>& extents,
++                          MigrationStats* stats);
+ 
+   IOStatus MigrateFileExtents(
+       const std::string& fname,
+-      const std::vector<ZoneExtentSnapshot*>& migrate_exts);
++      const std::vector<ZoneExtentSnapshot*>& migrate_exts,
++      MigrationStats* stats);
+ 
+  private:
+   const uint64_t GC_START_LEVEL =
+       20;                      /* Enable GC when < 20% free space available */
+   const uint64_t GC_SLOPE = 3; /* GC agressiveness */
+   void GCWorker();
++  IOStatus ReadReclaimOneZone();
+ };
+ #endif  // !defined(ROCKSDB_LITE) && defined(OS_LINUX)
+ 
+diff --git a/fs/io_zenfs.cc b/fs/io_zenfs.cc
+index 5d75522..93506b2 100644
+--- a/fs/io_zenfs.cc
++++ b/fs/io_zenfs.cc
+@@ -1106,7 +1106,15 @@ IOStatus ZoneFile::MigrateData(uint64_t offset, uint32_t length,
+       free(buf);
+       return IOStatus::IOError(strerror(errno));
+     }
+-    target_zone->Append(buf, r);
++    if (r != static_cast<int>(read_sz + pad_sz)) {
++      free(buf);
++      return IOStatus::IOError("迁移数据时发生短读");
++    }
++    IOStatus s = target_zone->Append(buf, r);
++    if (!s.ok()) {
++      free(buf);
++      return s;
++    }
+     length -= read_sz;
+     offset += r;
+   }
+diff --git a/fs/zbd_zenfs.cc b/fs/zbd_zenfs.cc
+index b991597..23ccd7d 100644
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -838,6 +838,11 @@ uint64_t ZonedBlockDevice::GetZoneSize() { return zbd_be_->GetZoneSize(); }
+ 
+ uint32_t ZonedBlockDevice::GetNrZones() { return zbd_be_->GetNrZones(); }
+ 
++IOStatus ZonedBlockDevice::GetZoneReadPressure(
++    ZoneReadPressureReport *report) {
++  return zbd_be_->GetZoneReadPressure(report);
++}
++
+ void ZonedBlockDevice::EncodeJsonZone(std::ostream &json_stream,
+                                       const std::vector<Zone *> zones) {
+   bool first_element = true;
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+index c371109..5c911d3 100644
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -33,6 +33,21 @@ namespace ROCKSDB_NAMESPACE {
+ 
+ class ZonedBlockDevice;
+ class ZonedBlockDeviceBackend;
++
++struct ZoneReadPressure {
++  uint64_t start = 0;
++  uint64_t max_block_reads = 0;
++  uint64_t sum_block_reads = 0;
++  uint32_t blocks_ge_80pct = 0;
++  uint32_t blocks_ge_90pct = 0;
++  uint32_t blocks_at_threshold = 0;
++};
++
++struct ZoneReadPressureReport {
++  uint64_t read_threshold = 0;
++  uint32_t blocks_per_zone = 0;
++  std::vector<ZoneReadPressure> zones;
++};
+ class ZoneSnapshot;
+ class ZenFSSnapshotOptions;
+ 
+@@ -128,6 +143,9 @@ class ZonedBlockDeviceBackend {
+   virtual uint64_t ZoneWp(std::unique_ptr<ZoneList> &zones,
+                           unsigned int idx) = 0;
+   virtual std::string GetFilename() = 0;
++  virtual IOStatus GetZoneReadPressure(ZoneReadPressureReport *) {
++    return IOStatus::NotSupported("无法获取物理块读取压力");
++  }
+   uint32_t GetBlockSize() { return block_sz_; };
+   uint64_t GetZoneSize() { return zone_sz_; };
+   uint32_t GetNrZones() { return nr_zones_; };
+@@ -200,6 +218,7 @@ class ZonedBlockDevice {
+ 
+   uint64_t GetZoneSize();
+   uint32_t GetNrZones();
++  IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
+   std::vector<Zone *> GetMetaZones() { return meta_zones; }
+ 
+   void SetFinishTreshold(uint32_t threshold) { finish_threshold_ = threshold; }
+diff --git a/fs/zbdlib_zenfs.cc b/fs/zbdlib_zenfs.cc
+index 2ad44e7..04d97a8 100644
+--- a/fs/zbdlib_zenfs.cc
++++ b/fs/zbdlib_zenfs.cc
+@@ -9,10 +9,13 @@
+ #include "zbdlib_zenfs.h"
+ 
+ #include <errno.h>
++#include <endian.h>
+ #include <fcntl.h>
+ #include <libzbd/zbd.h>
++#include <linux/nvme_ioctl.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/ioctl.h>
+ #include <unistd.h>
+ 
+ #include <fstream>
+@@ -23,6 +26,56 @@
+ 
+ namespace ROCKSDB_NAMESPACE {
+ 
++namespace {
++
++constexpr uint8_t kFemuReadPressureLog = 0xc1;
++
++struct __attribute__((packed)) ReadPressureLogHeader {
++  uint32_t version;
++  uint32_t entry_size;
++  uint32_t nr_zones;
++  uint32_t blocks_per_zone;
++  uint64_t read_threshold;
++  uint64_t reserved;
++};
++
++struct __attribute__((packed)) ReadPressureLogEntry {
++  uint64_t zslba;
++  uint64_t max_block_reads;
++  uint64_t sum_block_reads;
++  uint32_t blocks_ge_80pct;
++  uint32_t blocks_ge_90pct;
++  uint32_t blocks_at_threshold;
++  uint32_t reserved;
++};
++
++static_assert(sizeof(ReadPressureLogHeader) == 32, "C1h 日志头长度异常");
++static_assert(sizeof(ReadPressureLogEntry) == 40, "C1h 日志条目长度异常");
++
++IOStatus ReadPressureLog(int fd, uint32_t nsid, void *data, uint32_t len) {
++  nvme_admin_cmd cmd = {};
++  uint32_t dwords = len / 4 - 1;
++  cmd.opcode = 0x02;  // 获取日志页
++  cmd.nsid = nsid;
++  cmd.addr = reinterpret_cast<uint64_t>(data);
++  cmd.data_len = len;
++  cmd.cdw10 = ((dwords & 0xffff) << 16) | kFemuReadPressureLog;
++  cmd.cdw11 = dwords >> 16;
++
++  int ret = ioctl(fd, NVME_IOCTL_ADMIN_CMD, &cmd);
++  if (ret < 0) {
++    return IOStatus::IOError("读取 FEMU 物理块读取压力日志失败：" +
++                             std::string(strerror(errno)));
++  }
++  if (ret != 0) {
++    return IOStatus::IOError("读取 FEMU 物理块读取压力日志的 NVMe 状态码：" +
++                             std::to_string(ret));
++  }
++  return IOStatus::OK();
++}
++
++}  // 匿名命名空间
++
+ ZbdlibBackend::ZbdlibBackend(std::string bdevname)
+     : filename_("/dev/" + bdevname),
+       read_f_(-1),
+@@ -109,6 +162,60 @@ IOStatus ZbdlibBackend::Open(bool readonly, bool exclusive,
+   return IOStatus::OK();
+ }
+ 
++IOStatus ZbdlibBackend::GetZoneReadPressure(ZoneReadPressureReport *report) {
++  int nsid = ioctl(read_f_, NVME_IOCTL_ID);
++  if (nsid <= 0) {
++    return IOStatus::NotSupported("读取压力接口要求使用 NVMe 命名空间");
++  }
++
++  ReadPressureLogHeader header = {};
++  IOStatus s = ReadPressureLog(read_f_, nsid, &header, sizeof(header));
++  if (!s.ok()) return s;
++  if (le32toh(header.version) != 1 ||
++      le32toh(header.entry_size) != sizeof(ReadPressureLogEntry) ||
++      le32toh(header.nr_zones) != nr_zones_) {
++    return IOStatus::Corruption("FEMU 读取压力日志格式异常");
++  }
++
++  std::vector<uint8_t> bytes(sizeof(header) +
++                             nr_zones_ * sizeof(ReadPressureLogEntry));
++  s = ReadPressureLog(read_f_, nsid, bytes.data(), bytes.size());
++  if (!s.ok()) return s;
++
++  const auto *full_header =
++      reinterpret_cast<const ReadPressureLogHeader *>(bytes.data());
++  if (le32toh(full_header->version) != 1 ||
++      le32toh(full_header->entry_size) != sizeof(ReadPressureLogEntry) ||
++      le32toh(full_header->nr_zones) != nr_zones_) {
++    return IOStatus::Corruption("读取期间 FEMU 读取压力日志格式发生变化");
++  }
++
++  ZoneReadPressureReport result;
++  result.read_threshold = le64toh(full_header->read_threshold);
++  result.blocks_per_zone = le32toh(full_header->blocks_per_zone);
++  const auto *entries = reinterpret_cast<const ReadPressureLogEntry *>(
++      bytes.data() + sizeof(ReadPressureLogHeader));
++  result.zones.reserve(nr_zones_);
++  for (uint32_t i = 0; i < nr_zones_; ++i) {
++    const auto &entry = entries[i];
++    ZoneReadPressure zone;
++    // C1h 条目按命名空间内的 Zone 顺序排列；zone_sz_ 的单位是字节。
++    zone.start = static_cast<uint64_t>(i) * zone_sz_;
++    zone.max_block_reads = le64toh(entry.max_block_reads);
++    zone.sum_block_reads = le64toh(entry.sum_block_reads);
++    zone.blocks_ge_80pct = le32toh(entry.blocks_ge_80pct);
++    zone.blocks_ge_90pct = le32toh(entry.blocks_ge_90pct);
++    zone.blocks_at_threshold = le32toh(entry.blocks_at_threshold);
++    if (i == 0 && le64toh(entry.zslba) != 0) {
++      return IOStatus::Corruption("FEMU 读取压力日志中的首个 Zone 异常");
++    }
++    result.zones.emplace_back(zone);
++  }
++
++  *report = std::move(result);
++  return IOStatus::OK();
++}
++
+ std::unique_ptr<ZoneList> ZbdlibBackend::ListZones() {
+   int ret;
+   void *zones;
+diff --git a/fs/zbdlib_zenfs.h b/fs/zbdlib_zenfs.h
+index 856c279..3881900 100644
+--- a/fs/zbdlib_zenfs.h
++++ b/fs/zbdlib_zenfs.h
+@@ -83,6 +83,7 @@ class ZbdlibBackend : public ZonedBlockDeviceBackend {
+   };
+ 
+   std::string GetFilename() { return filename_; }
++  IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
+ 
+  private:
+   IOStatus CheckScheduler();
