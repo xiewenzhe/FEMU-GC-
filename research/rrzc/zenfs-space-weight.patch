@@ -1,0 +1,45 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -321,9 +321,19 @@
+     } else simple_enabled = false;
+   }
++  // 仅显式实验配置改变权重；未设置时保持原50/50及原日志字段。
++  uint64_t simple_space_weight = 50;
++  if (simple_enabled && !rrzc_simple::ParseSpaceWeight(
++          getenv("ZENFS_RRZC_SPACE_WEIGHT_PCT"), &simple_space_weight))
++    simple_enabled = false;
++  const char* score_label = simple_space_weight == 50 ?
++      "等权分数ppm" : "加权分数ppm";
++  const char* used_label = simple_space_weight == 50 ?
++      "实际使用等权" : "实际使用加权";
+   const bool simple_weighted = simple_enabled && strcmp(simple_mode, "weighted") == 0;
+   if (simple_mode && !simple_enabled)
+     Error(logger_, "简单双因素：配置非法，保持原批量策略");
+   if (simple_enabled)
+     Info(logger_, "简单双因素：启用，模式=%s，回收预算=%lu，有效量权重=%d%%，块读数权重=%d%%，无趋势或未来预测",
+-         simple_mode, simple_budget, simple_weighted ? 50 : 100, simple_weighted ? 50 : 0);
++         simple_mode, simple_budget, simple_weighted ? static_cast<int>(simple_space_weight) : 100,
++         simple_weighted ? static_cast<int>(100-simple_space_weight) : 0);
+   // 仅隔离实验：显式启用后，一次选择指定的原空间合格区，不实现风险评分。
+@@ -486,14 +496,16 @@
+         const uint64_t risk = c.pressure_available ?
+             rrzc_simple::Ratio(std::min(c.maximum_reads, c.threshold), c.threshold) : 0;
+-        Info(logger_, "简单双因素候选：Zone=%lu，有效字节=%lu，容量字节=%lu，最大块读数=%lu，读数阈值=%lu，覆盖资格=%d，空目标资格=%d，读压力可用=%d，空间分量ppm=%lu，风险分量ppm=%lu，等权分数ppm=%lu",
++        Info(logger_, "简单双因素候选：Zone=%lu，有效字节=%lu，容量字节=%lu，最大块读数=%lu，读数阈值=%lu，覆盖资格=%d，空目标资格=%d，读压力可用=%d，空间分量ppm=%lu，风险分量ppm=%lu，%s=%lu",
+              c.zone, c.valid, c.capacity, c.maximum_reads, c.threshold, c.covered,
+-             c.target_available, c.pressure_available, space, risk, (space+risk)/2);
++             c.target_available, c.pressure_available, space, risk, score_label,
++             rrzc_simple::Score(space, risk, simple_space_weight));
+       }
+-      const auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted);
++      const auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
++                                                simple_space_weight);
+       if (decision.found) {
+         migrate_zones_start.clear();
+         migrate_zones_start.emplace(decision.selected.zone);
+-        Info(logger_, "简单双因素实际集合：模式=%s，原合格区=%zu，实际选中=1，Zone=%lu，回收预算=%lu，实际使用等权=%d，等权分数ppm=%lu",
++        Info(logger_, "简单双因素实际集合：模式=%s，原合格区=%zu，实际选中=1，Zone=%lu，回收预算=%lu，%s=%d，%s=%lu",
+              simple_mode, original_count, decision.selected.zone, simple_budget,
+-             decision.used_weighted, decision.score_ppm);
++             used_label, decision.used_weighted, score_label, decision.score_ppm);
+       } else {

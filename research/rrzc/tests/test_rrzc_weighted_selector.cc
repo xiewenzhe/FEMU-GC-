@@ -39,5 +39,23 @@ int main() {
   Check(Choose({hot, cold}, 192, true).selected.zone == 10);
   Candidate huge{30, 1, UINT64_MAX, UINT64_MAX, UINT64_MAX, true, true, true};
   Check(Choose({huge}, UINT64_MAX-1, true).score_ppm <= kScale);
+  uint64_t weight = 0;
+  Check(ParseSpaceWeight(nullptr, &weight) && weight == 50);
+  Check(ParseSpaceWeight("80", &weight) && weight == 80);
+  Check(ParseSpaceWeight("0", &weight) && weight == 0);
+  Check(ParseSpaceWeight("100", &weight) && weight == 100);
+  for (const char* bad : {"", "101", "-1", "+80", "80x", " 80", "999999999999999999999"})
+    Check(!ParseSpaceWeight(bad, &weight));
+  Candidate roomy{10, 16, 256, 0, 4096, true, true, true};
+  Candidate risky{20, 64, 256, 2048, 4096, true, true, true};
+  Check(Choose({roomy, risky}, 192, true).selected.zone == 20);
+  d = Choose({roomy, risky}, 192, true, 80);
+  Check(d.selected.zone == 10 && d.score_ppm == 750000);
+  Check(Choose({roomy, risky}, 192, false, 80).selected.zone == 10);
+  Check(Choose({roomy, risky}, 192, true, 0).selected.zone == 20);
+  Check(Choose({roomy, risky}, 192, true, 100).selected.zone == 10);
+  Check(!Choose({roomy, risky}, 192, true, 101).found);
+  risky.pressure_available = false;
+  Check(!Choose({roomy, risky}, 192, true, 80).used_weighted);
   std::cout << "双因素内核通过：" << checks << "项合成断言" << std::endl;
 }
