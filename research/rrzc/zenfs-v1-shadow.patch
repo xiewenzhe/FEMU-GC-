@@ -1,0 +1,403 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index d1423b989..d87dce445 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -29,6 +29,8 @@
+ #include "rocksdb/utilities/object_registry.h"
+ #include "snapshot.h"
+ #include "rrzc_weighted_selector.h"
++#include "rrzc_urgency_selector.h"
++#include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+ 
+@@ -362,6 +364,19 @@ void ZenFS::GCWorker() {
+     simple_enabled = false;
+   }
+ 
++  const char* shadow_request=getenv("ZENFS_RRZC_V1_SHADOW");
++  const bool shadow_enabled=shadow_request && strcmp(shadow_request,"1")==0 &&
++      simple_enabled && !simple_weighted && !test_choice_pending;
++  v1_shadow_.store(shadow_enabled);
++  // 初版仅观察固定实验参数；不是最终模型，也不据此实际改选。
++  const uint64_t shadow_horizon=10*rrzc_v1::kSecond;
++  const uint64_t shadow_extra_budget=16ULL<<20;
++  uint64_t shadow_round=0;
++  if (shadow_request && !shadow_enabled)
++    Error(logger_,"V1影子：入口关闭，要求有效量单区Greedy且不能混用加权或人工选区");
++  if (shadow_enabled)
++    Info(logger_,"V1影子：已启用，实际仍Greedy，近期界限秒=10，额外有效搬运预算字节=%lu，不启用真实改选",shadow_extra_budget);
++
+   while (run_gc_worker_) {
+     usleep(1000 * 1000 * 10);
+ 
+@@ -502,6 +517,57 @@ void ZenFS::GCWorker() {
+       }
+       const auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
+                                                 simple_space_weight);
++      if (shadow_enabled) {
++        ++shadow_round;
++        const auto query_start=std::chrono::steady_clock::now();
++        rrzc_v1::RecentReport recent;
++        const IOStatus recent_status=zbd_->GetZoneRecentReads(&recent);
++        const uint64_t query_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now()-query_start).count();
++        const auto recent_after=zbd_->GetZoneResetStates();
++        std::map<uint64_t,rrzc_v1::RecentBlock> usable;
++        const bool frame_ok=recent_status.ok() && pressure_status.ok() &&
++            recent.threshold==pressure.read_threshold &&
++            recent.blocks_per_zone==pressure.blocks_per_zone && query_ns<=2*rrzc_v1::kSecond;
++        for (const auto& c:candidates) {
++          const auto b=std::find_if(recent.zones.begin(),recent.zones.end(),
++              [&](const rrzc_v1::RecentBlock& x){return x.zone==c.zone;});
++          const auto first=diagnostic_before.find(c.zone);
++          const auto last=recent_after.find(c.zone);
++          Zone* live=zbd_->GetIOZone(c.zone);
++          const auto original=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
++              [&](const ZoneSnapshot& x){return x.start==c.zone;});
++          const bool stable=frame_ok && c.pressure_available && b!=recent.zones.end() &&
++              b->rc>=c.maximum_reads &&
++              first!=diagnostic_before.end() && last!=recent_after.end() && live &&
++              original!=snapshot.zones_.end() && live->wp_==original->wp &&
++              live->used_capacity_==c.valid && IsMaintenanceWindowStable(
++                  first->second,last->second,live->GetResetState());
++          if (stable) usable.emplace(c.zone,*b);
++          if (b!=recent.zones.end()) {
++            const auto eta=rrzc_v1::TimeToThreshold(*b,recent.threshold);
++            Info(logger_,"V1影子候选：轮次=%lu，Zone=%lu，设备会话=%lu/%lu，设备代际=%lu，块编号=%u，PPA=%u/%u/%u/%u，快照纳秒=%lu，代际起点纳秒=%lu，当前RC=%lu，十秒真实增量=%lu，三十秒真实增量=%lu，窗口标志=%u，统计准入=%d，原候选资格=%d，预测可知=%d，预测达阈值纳秒=%lu，有效字节=%lu",
++                 shadow_round,c.zone,recent.session_hi,recent.session_lo,b->generation,
++                 b->block_id,b->ch,b->lun,b->plane,b->block,b->snapshot_ns,b->epoch_start_ns,
++                 b->rc,b->delta10,b->delta30,b->flags,stable,
++                 rrzc_simple::Eligible(c,simple_budget),stable && eta.known,
++                 eta.threshold_ns,c.valid);
++          } else Info(logger_,"V1影子候选：轮次=%lu，Zone=%lu，近期统计缺失，有效字节=%lu",shadow_round,c.zone,c.valid);
++          for (const auto& file:snapshot.zone_files_) {
++            uint64_t bytes=0;
++            for (const auto& ext:file.extents) if (ext.zone_start==c.zone) bytes+=ext.length;
++            if (bytes) Info(logger_,"V1影子文件：轮次=%lu，Zone=%lu，文件编号=%lu，文件名=%s，区内有效字节=%lu",
++                shadow_round,c.zone,file.file_id,file.filename.c_str(),bytes);
++          }
++        }
++        const auto shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
++            simple_budget,shadow_horizon,shadow_extra_budget);
++        Info(logger_,"V1影子决策：轮次=%lu，存在Greedy=%d，实际Greedy=%lu，影子建议=%lu，会改选=%d，额外有效搬运字节=%lu，预测达阈值纳秒=%lu，界限纳秒=%lu，预算字节=%lu，查询纳秒=%lu，帧可用=%d，原因=%s，查询状态=%s，实际改选=0",
++             shadow_round,shadow.greedy.found,shadow.greedy.found ? shadow.greedy.selected.zone : 0,
++             shadow.proposed_zone,shadow.would_switch,shadow.extra_valid,shadow.predicted_ns,
++             shadow_horizon,shadow_extra_budget,query_ns,frame_ok,shadow.reason,
++             recent_status.ToString().c_str());
++      }
+       if (decision.found) {
+         migrate_zones_start.clear();
+         migrate_zones_start.emplace(decision.selected.zone);
+@@ -949,6 +1015,9 @@ IOStatus ZenFS::DeleteFileNoLock(std::string fname, const IOOptions& options,
+       if (zoneFile->GetNrLinks() > 0) return s;
+       /* Mark up the file as deleted so it won't be migrated by GC */
+       zoneFile->SetDeleted();
++      if (v1_shadow_.load())
++        Info(logger_,"V1后续文件退役：文件编号=%lu，文件名=%s，最后链接已删除，元数据持久化成功",
++             zoneFile->GetID(),fname.c_str());
+       zoneFile.reset();
+     }
+   } else {
+@@ -2223,6 +2292,8 @@ IOStatus ZenFS::MigrateFileExtents(
+     }
+ 
+     uint64_t target_start = target_zone->wp_;
++    const uint64_t observed_source=ext->zone_->start_;
++    const uint64_t observed_source_start=ext->start_;
+     if (zfile->IsSparse()) {
+       // 缓冲写入的数据片段包含 SPARSE_HEADER_SIZE 字节的内联元数据。
+       target_start = target_zone->wp_ + ZoneFile::SPARSE_HEADER_SIZE;
+@@ -2241,10 +2312,19 @@ IOStatus ZenFS::MigrateFileExtents(
+       }
+     }
+     if (!s.ok()) {
++      if (v1_shadow_.load())
++        Info(logger_,"V1后续迁移复制：文件编号=%lu，文件名=%s，源Zone=%lu，源片段=%lu，目标Zone=%lu，目标片段=%lu，有效字节=%lu，复制成功=0，映射提交=尚未确认",
++             zfile->GetID(),fname.c_str(),observed_source,observed_source_start,
++             target_zone->start_,target_start,ext->length_);
+       zbd_->ReleaseMigrateZone(target_zone);
+       break;
+     }
+ 
++    if (v1_shadow_.load())
++      Info(logger_,"V1后续迁移复制：文件编号=%lu，文件名=%s，源Zone=%lu，源片段=%lu，目标Zone=%lu，目标片段=%lu，有效字节=%lu，复制成功=1，映射提交=尚未确认",
++           zfile->GetID(),fname.c_str(),observed_source,observed_source_start,
++           target_zone->start_,target_start,ext->length_);
++
+     // 文件可能在迁移期间被删除，此时不更新原文件的映射。
+     if (GetFile(fname).get() != zfile.get()) {
+       s = IOStatus::NotFound("迁移期间文件已被删除");
+@@ -2266,6 +2346,9 @@ IOStatus ZenFS::MigrateFileExtents(
+ 
+   if (changed) {
+     IOStatus sync_status = SyncFileExtents(zfile.get(), new_extent_list);
++    if (v1_shadow_.load())
++      Info(logger_,"V1后续映射提交：文件编号=%lu，文件名=%s，成功=%d，状态=%s",
++           zfile->GetID(),fname.c_str(),sync_status.ok(),sync_status.ToString().c_str());
+     if (!sync_status.ok()) s = sync_status;
+   } else {
+     for (auto* ext : new_extent_list) delete ext;
+diff --git a/fs/fs_zenfs.h b/fs/fs_zenfs.h
+index e53abc18e..f209d7f0b 100644
+--- a/fs/fs_zenfs.h
++++ b/fs/fs_zenfs.h
+@@ -14,6 +14,7 @@ namespace fs = filesystem_utility;
+ namespace fs = std::filesystem;
+ #endif
+ 
++#include <atomic>
+ #include <memory>
+ #include <thread>
+ 
+@@ -149,6 +150,8 @@ class ZenFS : public FileSystemWrapper {
+   std::unique_ptr<std::thread> gc_worker_ = nullptr;
+   bool run_gc_worker_ = false;
+   bool rr_enabled_ = false;
++  // 仅控制新增诊断；跨删除线程访问必须使用原子值，不影响选区。
++  std::atomic<bool> v1_shadow_{false};
+   uint64_t rr_completed_zones_ = 0;
+   uint64_t rr_attempts_ = 0;
+   uint64_t rr_migrated_bytes_ = 0;
+diff --git a/fs/rrzc_recent_log.h b/fs/rrzc_recent_log.h
+new file mode 100644
+index 000000000..772ec8987
+--- /dev/null
++++ b/fs/rrzc_recent_log.h
+@@ -0,0 +1,72 @@
++// 独立C2h协议解析，不修改旧C1h数据结构或RR调用路径。
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <utility>
++#include <vector>
++
++namespace rrzc_v1 {
++constexpr uint64_t kSecond = 1000000000;
++constexpr uint32_t kEnabled = 1, kValid10 = 2, kValid30 = 4, kLoss = 8;
++constexpr size_t kHeaderBytes = 56, kEntryBytes = 88;
++struct RecentBlock {
++  uint64_t zone = 0, generation = 0, snapshot_ns = 0, epoch_start_ns = 0;
++  uint64_t rc = 0, delta10 = 0, delta30 = 0;
++  uint32_t zone_index = 0, block_id = 0, ch = 0, lun = 0, plane = 0, block = 0, flags = 0;
++};
++struct RecentReport {
++  uint64_t threshold = 0, session_hi = 0, session_lo = 0;
++  uint32_t blocks_per_zone = 0;
++  std::vector<RecentBlock> zones;
++};
++inline uint64_t Little(const uint8_t* p, size_t n) {
++  uint64_t value = 0;
++  for (size_t i = 0; i < n; ++i) value |= uint64_t(p[i]) << (8*i);
++  return value;
++}
++inline bool DecodeRecent(const uint8_t* data, size_t size, uint32_t zones,
++                         uint64_t zone_size, RecentReport* output, std::string* error) {
++  *output = {};
++  auto fail = [&](const char* why) { *error = why; return false; };
++  if (!zones || !zone_size || size < kHeaderBytes || !data ||
++      zones > (SIZE_MAX-kHeaderBytes)/kEntryBytes ||
++      size != kHeaderBytes+size_t(zones)*kEntryBytes)
++    return fail("C2h缓冲区长度或几何不合法");
++  if (Little(data,4) != 1 || Little(data+4,4) != kEntryBytes ||
++      Little(data+8,4) != zones || !Little(data+12,4) ||
++      Little(data+40,8) != 10*kSecond || Little(data+48,8) != 30*kSecond)
++    return fail("C2h版本、条目或窗口不匹配");
++  RecentReport result;
++  result.blocks_per_zone = Little(data+12,4);
++  result.threshold = Little(data+16,8);
++  result.session_hi = Little(data+24,8); result.session_lo = Little(data+32,8);
++  if (!result.threshold || !(result.session_hi || result.session_lo))
++    return fail("C2h没有有效阈值或设备会话");
++  if (uint64_t(zones-1) > UINT64_MAX/zone_size)
++    return fail("C2h区地址溢出");
++  for (uint32_t i = 0; i < zones; ++i) {
++    const uint8_t* p = data+kHeaderBytes+size_t(i)*kEntryBytes;
++    RecentBlock b;
++    b.zone = uint64_t(i)*zone_size;
++    b.generation=Little(p+8,8); b.snapshot_ns=Little(p+16,8);
++    b.epoch_start_ns=Little(p+24,8); b.rc=Little(p+32,8);
++    b.delta10=Little(p+40,8); b.delta30=Little(p+48,8);
++    b.zone_index=Little(p+56,4); b.block_id=Little(p+60,4);
++    b.ch=Little(p+64,4); b.lun=Little(p+68,4); b.plane=Little(p+72,4);
++    b.block=Little(p+76,4); b.flags=Little(p+80,4);
++    if ((i == 0 && Little(p,8) != 0) || b.zone_index != i ||
++        b.block_id >= result.blocks_per_zone || (b.flags & ~uint32_t(15)) ||
++        !(b.flags & kEnabled) || Little(p+84,4) != 0 ||
++        b.epoch_start_ns > b.snapshot_ns || b.delta10 > b.delta30 || b.delta30 > b.rc)
++      return fail("C2h条目身份、计数或状态不合法");
++    const uint64_t age = b.snapshot_ns-b.epoch_start_ns;
++    if (((b.flags & kValid10) && age < 10*kSecond) ||
++        ((b.flags & kValid30) && (age < 30*kSecond || !(b.flags & kValid10))) ||
++        ((b.flags & kLoss) && (b.flags & kValid30)))
++      return fail("C2h窗口完整性标志矛盾");
++    result.zones.push_back(b);
++  }
++  *output = std::move(result); error->clear(); return true;
++}
++}  // 命名空间结束。
+diff --git a/fs/rrzc_urgency_selector.h b/fs/rrzc_urgency_selector.h
+new file mode 100644
+index 000000000..b9ea4fb6c
+--- /dev/null
++++ b/fs/rrzc_urgency_selector.h
+@@ -0,0 +1,68 @@
++// V1只用于影子评估：实际选区仍调用原有效量Greedy，不启用改选。
++#pragma once
++#include "rrzc_recent_log.h"
++#include "rrzc_weighted_selector.h"
++#include <algorithm>
++#include <map>
++
++namespace rrzc_v1 {
++struct Estimate { bool known = false; uint64_t threshold_ns = UINT64_MAX; };
++inline Estimate TimeToThreshold(const RecentBlock& b, uint64_t threshold) {
++  if (!threshold || !(b.flags & kEnabled)) return {};
++  if (b.rc >= threshold) return {true,0};
++  if ((b.flags & (kValid10|kValid30)) != (kValid10|kValid30)) return {};
++  const __uint128_t reads30 = std::min(__uint128_t(b.delta10)*3,
++                                      __uint128_t(b.delta30));
++  if (!reads30) return {true,UINT64_MAX};
++  const __uint128_t numerator = __uint128_t(threshold-b.rc)*30*kSecond;
++  const __uint128_t eta = (numerator+reads30-1)/reads30;
++  return {true,eta >= UINT64_MAX ? UINT64_MAX : uint64_t(eta)};
++}
++struct ShadowDecision {
++  rrzc_simple::Decision greedy;
++  uint64_t proposed_zone = 0, extra_valid = 0, predicted_ns = UINT64_MAX;
++  bool would_switch = false;
++  const char* reason = "没有合格候选";
++};
++inline ShadowDecision Evaluate(const std::vector<rrzc_simple::Candidate>& candidates,
++                               const std::map<uint64_t,RecentBlock>& recent,
++                               uint64_t threshold, uint64_t reclaim_budget,
++                               uint64_t horizon_ns, uint64_t extra_budget) {
++  ShadowDecision out;
++  out.greedy = rrzc_simple::Choose(candidates,reclaim_budget,false);
++  if (!out.greedy.found) return out;
++  out.proposed_zone = out.greedy.selected.zone;
++  auto g = recent.find(out.proposed_zone);
++  if (!horizon_ns || horizon_ns > 300*kSecond) {
++    out.reason="紧迫度参数不合法"; return out;
++  }
++  if (g == recent.end()) { out.reason="Greedy近期统计未知"; return out; }
++  const auto ge = TimeToThreshold(g->second,threshold);
++  if (!ge.known) { out.reason="Greedy窗口不完整"; return out; }
++  if (ge.threshold_ns <= horizon_ns) {
++    out.reason="Greedy自身已经紧迫"; out.predicted_ns=ge.threshold_ns; return out;
++  }
++  out.reason="没有近期紧迫候选";
++  uint64_t best_valid=UINT64_MAX;
++  for (const auto& c : candidates) {
++    if (!rrzc_simple::Eligible(c,reclaim_budget) || c.zone==out.greedy.selected.zone) continue;
++    auto p=recent.find(c.zone);
++    if (p==recent.end()) continue;
++    const auto e=TimeToThreshold(p->second,threshold);
++    if (!e.known || e.threshold_ns>horizon_ns) continue;
++    const uint64_t extra=c.valid>out.greedy.selected.valid ? c.valid-out.greedy.selected.valid : 0;
++    if (extra>extra_budget) {
++      if (!out.would_switch) out.reason="紧迫候选超出额外有效搬运预算";
++      continue;
++    }
++    if (!out.would_switch || e.threshold_ns<out.predicted_ns ||
++        (e.threshold_ns==out.predicted_ns &&
++         (c.valid<best_valid || (c.valid==best_valid && c.zone<out.proposed_zone)))) {
++      out.would_switch=true; out.proposed_zone=c.zone; out.extra_valid=extra;
++      out.predicted_ns=e.threshold_ns; best_valid=c.valid;
++      out.reason="近期紧迫且额外有效搬运在预算内";
++    }
++  }
++  return out;
++}
++}  // 命名空间结束。
+diff --git a/fs/zbd_zenfs.cc b/fs/zbd_zenfs.cc
+index 2a215bc27..ade25feac 100644
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -1162,6 +1162,10 @@ IOStatus ZonedBlockDevice::GetZoneReadPressure(
+   return zbd_be_->GetZoneReadPressure(report);
+ }
+ 
++IOStatus ZonedBlockDevice::GetZoneRecentReads(rrzc_v1::RecentReport *report) {
++  return zbd_be_->GetZoneRecentReads(report);
++}
++
+ std::map<uint64_t, ZoneResetState> ZonedBlockDevice::GetZoneResetStates() const {
+   std::map<uint64_t, ZoneResetState> states;
+   for (const auto* zone : io_zones) states.emplace(zone->start_, zone->GetResetState());
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+index 295efb9d4..8170e8009 100644
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -26,6 +26,7 @@
+ #include <vector>
+ 
+ #include "metrics.h"
++#include "rrzc_recent_log.h"
+ #include "rocksdb/env.h"
+ #include "rocksdb/file_system.h"
+ #include "rocksdb/io_status.h"
+@@ -161,6 +162,9 @@ class ZonedBlockDeviceBackend {
+   virtual IOStatus GetZoneReadPressure(ZoneReadPressureReport *) {
+     return IOStatus::NotSupported("无法获取物理块读取压力");
+   }
++  virtual IOStatus GetZoneRecentReads(rrzc_v1::RecentReport *) {
++    return IOStatus::NotSupported("无法获取同一物理块的近期真实读取增量");
++  }
+   uint32_t GetBlockSize() { return block_sz_; };
+   uint64_t GetZoneSize() { return zone_sz_; };
+   uint32_t GetNrZones() { return nr_zones_; };
+@@ -242,6 +246,7 @@ class ZonedBlockDevice {
+   uint64_t GetZoneSize();
+   uint32_t GetNrZones();
+   IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
++  IOStatus GetZoneRecentReads(rrzc_v1::RecentReport *report);
+   bool IsAllocationDiagnosticsEnabled() const {
+     return allocation_diag_enabled_;
+   }
+diff --git a/fs/zbdlib_zenfs.cc b/fs/zbdlib_zenfs.cc
+index 04d97a800..5066c2e9f 100644
+--- a/fs/zbdlib_zenfs.cc
++++ b/fs/zbdlib_zenfs.cc
+@@ -216,6 +216,28 @@ IOStatus ZbdlibBackend::GetZoneReadPressure(ZoneReadPressureReport *report) {
+   return IOStatus::OK();
+ }
+ 
++IOStatus ZbdlibBackend::GetZoneRecentReads(rrzc_v1::RecentReport *report) {
++  *report = {};
++  if (!nr_zones_ || nr_zones_ > (UINT32_MAX-rrzc_v1::kHeaderBytes)/rrzc_v1::kEntryBytes)
++    return IOStatus::InvalidArgument("C2h区数量或长度不合法");
++  int nsid = ioctl(read_f_, NVME_IOCTL_ID);
++  if (nsid <= 0) return IOStatus::NotSupported("C2h要求NVMe命名空间");
++  // 已知设备区数，单次读取完整页；不能先查头再查条目拼成跨时刻快照。
++  std::vector<uint8_t> bytes(rrzc_v1::kHeaderBytes+size_t(nr_zones_)*rrzc_v1::kEntryBytes);
++  nvme_admin_cmd cmd = {};
++  const uint32_t dwords = uint32_t(bytes.size()/4-1);
++  cmd.opcode=0x02; cmd.nsid=nsid;
++  cmd.addr=reinterpret_cast<uint64_t>(bytes.data()); cmd.data_len=bytes.size();
++  cmd.cdw10=((dwords & 0xffff)<<16)|0xc2; cmd.cdw11=dwords>>16;
++  const int ret=ioctl(read_f_,NVME_IOCTL_ADMIN_CMD,&cmd);
++  if (ret < 0) return IOStatus::IOError("读取C2h失败："+std::string(strerror(errno)));
++  if (ret) return IOStatus::IOError("读取C2h的NVMe状态码："+std::to_string(ret));
++  std::string error;
++  if (!rrzc_v1::DecodeRecent(bytes.data(),bytes.size(),nr_zones_,zone_sz_,report,&error))
++    return IOStatus::Corruption(error);
++  return IOStatus::OK();
++}
++
+ std::unique_ptr<ZoneList> ZbdlibBackend::ListZones() {
+   int ret;
+   void *zones;
+diff --git a/fs/zbdlib_zenfs.h b/fs/zbdlib_zenfs.h
+index 3881900c7..2d655d3d3 100644
+--- a/fs/zbdlib_zenfs.h
++++ b/fs/zbdlib_zenfs.h
+@@ -84,6 +84,7 @@ class ZbdlibBackend : public ZonedBlockDeviceBackend {
+ 
+   std::string GetFilename() { return filename_; }
+   IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
++  IOStatus GetZoneRecentReads(rrzc_v1::RecentReport *report) override;
+ 
+  private:
+   IOStatus CheckScheduler();

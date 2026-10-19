@@ -28,7 +28,7 @@ def rows(path):
         return list(csv.DictReader(stream))
 
 
-def expected_reads(seconds):
+def expected_reads(seconds, profile="original"):
     """独立重建固定读计划；不从真实RR或选区结果生成请求。"""
     result = []
     for g in range(seconds // 30):
@@ -41,11 +41,15 @@ def expected_reads(seconds):
                 if due >= seconds*10**9:
                     break
                 for kind in (0, 1):
+                    if profile=="maintenance-cases" and kind==1 and g%3!=0 and due-(30*g)*10**9>=65*10**9:
+                        continue
                     result.append((due, g, kind, phase, 0 if kind else (i % 8)*65536))
     return sorted(result, key=lambda r: r[:3])
 
 
-def check_trace(operations, seconds):
+def check_trace(operations, seconds, profile="original"):
+    if profile not in ("original","maintenance-cases"):
+        raise ValueError("未知读计划配置")
     traces = [hashlib.sha256(), hashlib.sha256()]
     serials = [0, 0]
     reads = []
@@ -67,7 +71,7 @@ def check_trace(operations, seconds):
             if thread != 0 or int(r["字节"]) != MIB:
                 raise ValueError("写线程或请求大小错误")
             writes[g].append((r["文件"], int(r["偏移"])))
-    expected = expected_reads(seconds)
+    expected = expected_reads(seconds, profile)
     if reads != [r[1:] for r in expected]:
         raise ValueError("真实读请求未完整执行固定计划")
     if set(writes) != set(range(seconds // 30)):

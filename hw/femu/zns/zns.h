@@ -11,6 +11,7 @@
 #include "../nvme.h"
 #include "zftl.h"
 #include "../nand/nand-media.h"
+#include "rr-history.h"
 
 #define LOGICAL_PAGE_SIZE (4*KiB)
 #define ZNS_PAGE_SIZE (16*KiB)
@@ -142,6 +143,13 @@ struct zns_sram{
     struct zns_write_cache* write_cache;
 };
 
+/* 仅统计开关启用时分配；锁不与Zone状态机锁嵌套。 */
+typedef struct ZnsRrZoneHistory {
+    QemuMutex lock;
+    uint64_t generation, born_ns;
+    FemuRrHistory *blocks;
+} ZnsRrZoneHistory;
+
 struct zns_ssd {
     uint64_t num_ch;
     uint64_t num_lun;
@@ -149,6 +157,11 @@ struct zns_ssd {
     uint64_t num_blk;
     uint64_t num_page;
     uint64_t rr_threshold; /* 0 表示关闭读干扰计数 */
+    bool rr_history_enabled;
+    uint32_t rr_history_max_events;
+    uint32_t rr_history_nr_zones;
+    uint64_t rr_session_hi, rr_session_lo;
+    ZnsRrZoneHistory *rr_history;
 
     struct zns_ch *ch;
     struct write_pointer wp;

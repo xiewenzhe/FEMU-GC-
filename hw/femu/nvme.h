@@ -1148,6 +1148,7 @@ enum NvmeLogIdentifier {
     NVME_LOG_SANITIZE           = 0x81,
     NVME_LOG_FEMU_STATS         = 0xc0,
     NVME_LOG_ZNS_RR_STATS       = 0xc1,
+    NVME_LOG_ZNS_RR_RECENT      = 0xc2,
 };
 
 /* 厂商自定义 C1h 日志页按 ZNS 命名空间提供，所有整数字段均为小端序。 */
@@ -1169,6 +1170,25 @@ typedef struct QEMU_PACKED ZnsRrZoneEntry {
     uint32_t blocks_at_threshold;
     uint32_t rsvd;
 } ZnsRrZoneEntry;
+
+/* 独立C2h诊断协议；C1h版本1和既有读取口径保持不变。 */
+enum ZnsRrRecentFlags {
+    ZNS_RR_RECENT_ENABLED = 1,
+    ZNS_RR_RECENT_VALID_10 = 2,
+    ZNS_RR_RECENT_VALID_30 = 4,
+    ZNS_RR_RECENT_LOSS = 8,
+};
+
+typedef struct QEMU_PACKED ZnsRrRecentHeader {
+    uint32_t version, entry_size, nr_zones, blocks_per_zone;
+    uint64_t read_threshold, session_hi, session_lo, window10_ns, window30_ns;
+} ZnsRrRecentHeader;
+
+typedef struct QEMU_PACKED ZnsRrRecentEntry {
+    uint64_t zslba, generation, snapshot_ns, epoch_start_ns;
+    uint64_t current_rc, delta10, delta30;
+    uint32_t zone_index, block_id, ch, lun, plane, block, flags, reserved;
+} ZnsRrRecentEntry;
 
 /* LID Supported and Effects data structure, one per log page identifier */
 enum NvmeLidSupport {
@@ -1981,6 +2001,8 @@ typedef struct ZNSCtrlParams {
     uint8_t  zns_num_blk;
     int zns_flash_type;
     uint64_t zns_rr_threshold; /* 主机端 RR 使用的物理块读取阈值；0 表示关闭计数 */
+    bool zns_rr_history; /* 默认关闭，不影响原始RC与维护路径 */
+    uint32_t zns_rr_history_max_events; /* 每块事件上限；溢出窗口明确标为不可用 */
     /*
      * Optional ZNS resource limits, all 0 = unlimited (spec MAR/MOR "no limit",
      * no zone-descriptor extension). Non-zero activates the already-present

@@ -3,6 +3,7 @@
 // 读、写、采样并发；固定请求计划不根据选区结果自适应。
 #include <algorithm>
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -43,7 +44,7 @@ struct Buffer {
   char* get() { return data.get(); }
 };
 struct Request { uint64_t due_ns; unsigned generation,kind,phase,index; };
-static std::vector<Request> make_reads(unsigned duration) {
+static std::vector<Request> make_reads(unsigned duration,bool victim_cases=false) {
   std::vector<Request> result;
   for(unsigned g=0;g<duration/30;++g) {
     const uint64_t birth=uint64_t(g)*30*1000000000ULL;
@@ -51,7 +52,11 @@ static std::vector<Request> make_reads(unsigned duration) {
       for(unsigned i=0;i<count;++i) {
         uint64_t due=birth+uint64_t(start)*1000000000ULL+uint64_t(i)*1000000000ULL/rate;
         if(due>=uint64_t(duration)*1000000000ULL) break;
-        for(unsigned kind=0;kind<2;++kind) result.push_back({due,g,kind,phase,i});
+        for(unsigned kind=0;kind<2;++kind) {
+          // 仅显式受控场景：停止类/退役类热文件从65秒起没有后续业务读。
+          if(victim_cases&&kind==1&&g%3!=0&&due-birth>=65ULL*1000000000) continue;
+          result.push_back({due,g,kind,phase,i});
+        }
       }
     };
     add(10,3584,512,0); add(17,43*4,4,1); add(60,768,32,2); add(84,36*4,4,1);
@@ -66,10 +71,16 @@ class Stream {
   ZenFS& fs; ZonedBlockDevice& device; std::shared_ptr<Logger> logger;
   FileOptions options;
   std::ofstream operations,states,pressures,manifest;
+  // 仅测试观察：默认不采样，不参与任何RR或ZC决策。
+  std::ofstream recent;
+  unsigned recent_interval_ms=0;
+  std::atomic<bool> recent_stop{false};
   Clock::time_point origin;
   std::mutex record_mutex,ready_mutex,error_mutex;
   std::condition_variable ready_cv;
   std::vector<bool> ready,read_done;
+  std::vector<std::array<bool,2>> kind_read_done;
+  bool victim_cases=false;
   std::atomic<bool> cancelled{false};
   std::exception_ptr error;
   unsigned duration;
@@ -77,13 +88,26 @@ class Stream {
   Stream(ZenFS& f,ZonedBlockDevice& d,std::shared_ptr<Logger> l,unsigned seconds,const std::string& out)
       : fs(f),device(d),logger(l),operations(out+"/operations.csv"),states(out+"/states.csv"),
         pressures(out+"/pressure.csv"),manifest(out+"/manifest.csv"),origin(Clock::now()),
-        ready(seconds/30,false),read_done(seconds/30,false),duration(seconds) {
+        ready(seconds/30,false),read_done(seconds/30,false),kind_read_done(seconds/30,{false,false}),duration(seconds) {
     options.use_direct_reads=options.use_direct_writes=true;
     require(operations.good()&&states.good()&&pressures.good()&&manifest.good(),"记录文件创建失败");
     operations<<"线程,序号,阶段,操作,代号,文件,偏移,字节,开始纳秒,延迟纳秒,排程迟到纳秒,成功\n";
     states<<"经过纳秒,空闲字节,有效字节,满区可回收字节,空区,部分区,满区,累计IO区成功重置\n";
     pressures<<"经过纳秒,Zone,最大块读数,总读数,达阈值块,主机代际\n";
     manifest<<"文件,有效字节,模式种子,是否填充\n";
+    const char* cases=getenv("RRZC_TEST_VICTIM_PROFILE");
+    if(cases) {
+      require(std::string(cases)=="maintenance-cases"&&seconds==180,"受控维护场景仅支持本轮180秒");
+      victim_cases=true;
+    }
+    const char* interval=getenv("RRZC_TEST_RECENT_SAMPLE_MS");
+    if(interval) {
+      require(std::string(interval)=="500"||std::string(interval)=="1000","逐块观察仅接受500或1000毫秒");
+      recent_interval_ms=std::stoul(interval);
+      require(!std::filesystem::exists(out+"/recent.csv"),"拒绝覆盖逐块轨迹");
+      recent.open(out+"/recent.csv"); require(recent.good(),"逐块轨迹创建失败");
+      recent<<"批次,查询开始纳秒,查询结束纳秒,设备会话高位,设备会话低位,Zone,区索引,设备代际,块编号,通道,LUN,plane,block,设备快照纳秒,代际起点纳秒,RC,十秒真实增量,三十秒真实增量,窗口标志,RR阈值\n";
+    }
   }
   template <typename A> void call(unsigned thread,const std::string& phase,const std::string& op,
                                  int g,const std::string& file,uint64_t offset,uint64_t bytes,A action,
@@ -216,9 +240,10 @@ class Stream {
     }
   }
   void reader_loop() {
-    auto requests=make_reads(duration);
+    auto requests=make_reads(duration,victim_cases);
     std::vector<uint64_t> remaining(duration/30,0);
-    for(const auto& r:requests) ++remaining[r.generation];
+    std::vector<std::array<uint64_t,2>> remaining_kind(duration/30,{0,0});
+    for(const auto& r:requests) { ++remaining[r.generation]; ++remaining_kind[r.generation][r.kind]; }
     struct Readers { std::unique_ptr<FSRandomAccessFile> file[2]; };
     std::map<unsigned,Readers> readers;
     Buffer scratch;
@@ -243,6 +268,17 @@ class Stream {
       },due);
       require(result.size()==4096,"业务短读");
       for(unsigned i=0;i<4096;++i) require(static_cast<unsigned char>(result.data()[i])==pattern(offset+i,seed_for(r.generation,r.kind)),"业务数据字节不符");
+      if(--remaining_kind[r.generation][r.kind]==0) {
+        if(victim_cases&&r.kind==1&&r.generation%3!=0) {
+          // 退役前必须释放实际读句柄，不能将删除最后链接误作有效量立即归零。
+          readers.at(r.generation).file[r.kind].reset();
+          Info(logger,"受控热读停止：代号=%u，经过纳秒=%lu，文件=%s，场景=%s，实际读句柄已释放",
+               r.generation,nanos(Clock::now()-origin),anchor(r.generation,1).c_str(),
+               r.generation%3==1?"停止但仍有效":"即将退役");
+        }
+        { std::lock_guard<std::mutex> lock(ready_mutex); kind_read_done[r.generation][r.kind]=true; }
+        ready_cv.notify_all();
+      }
       if(--remaining[r.generation]==0) {
         readers.erase(r.generation);
         { std::lock_guard<std::mutex> lock(ready_mutex); read_done[r.generation]=true; }
@@ -273,6 +309,44 @@ class Stream {
     // 空间、C1h、代际分次读取，不是原子快照。
     Info(logger,"滚动负载时钟：经过纳秒=%lu",elapsed);
   }
+  void recent_loop() {
+    uint64_t serial=0;
+    auto due=origin;
+    while(!recent_stop&&!cancelled) {
+      // 查询期间不持业务记录锁或文件锁；只采当前最大块，不拼接不同块读数。
+      const uint64_t begin=nanos(Clock::now()-origin);
+      rrzc_v1::RecentReport report; check(device.GetZoneRecentReads(&report));
+      const uint64_t end=nanos(Clock::now()-origin);
+      require(report.threshold==4096&&report.blocks_per_zone==64&&report.zones.size()==32,
+              "逐块采样设备几何或阈值不符");
+      for(const auto& b:report.zones)
+        recent<<serial<<','<<begin<<','<<end<<','<<report.session_hi<<','<<report.session_lo<<','
+              <<b.zone<<','<<b.zone_index<<','<<b.generation<<','<<b.block_id<<','<<b.ch<<','<<b.lun<<','
+              <<b.plane<<','<<b.block<<','<<b.snapshot_ns<<','<<b.epoch_start_ns<<','<<b.rc<<','
+              <<b.delta10<<','<<b.delta30<<','<<b.flags<<','<<report.threshold<<'\n';
+      recent.flush(); require(recent.good(),"逐块轨迹写入失败");
+      ++serial;
+      due+=std::chrono::milliseconds(recent_interval_ms);
+      // 迟到时不追赶连发采样，也不调整业务读写计划。
+      if(due<Clock::now()) due=Clock::now()+std::chrono::milliseconds(recent_interval_ms);
+      while(!recent_stop&&!cancelled&&Clock::now()<due)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  void retire_case_loop() {
+    // 预设时间只属于测试负载；不输入Greedy或V1，不直接调用清理/Reset。
+    for(unsigned g=2;g<duration/30;g+=3) {
+      auto due=origin+std::chrono::seconds(g*30+66);
+      if(due>=origin+std::chrono::seconds(duration)) break;
+      require(pause(due),"受控退役线程停止");
+      std::unique_lock<std::mutex> lock(ready_mutex);
+      ready_cv.wait(lock,[&]{return cancelled||kind_read_done[g][1];});
+      require(!cancelled,"读线程失败，拒绝退役"); lock.unlock();
+      remove(anchor(g,1),g,true);
+      Info(logger,"受控文件退役完成：代号=%u，经过纳秒=%lu，文件=%s，预设年龄秒=66",
+           g,nanos(Clock::now()-origin),anchor(g,1).c_str());
+    }
+  }
   void run() {
     require(device.GetUsedSpace()==0,"不是新空设备，拒绝混入旧数据");
     check(fs.CreateDir("/rrzc-stream",IOOptions(),nullptr));
@@ -282,16 +356,25 @@ class Stream {
       if(i%4==3) std::cout<<"固定填充完成 "<<i+1<<'/'<<kFillers<<"区"<<std::endl;
     }
     origin=Clock::now(); sample();
+    std::thread observer;
+    if(recent_interval_ms) observer=std::thread([&]{guarded([&]{recent_loop();});});
     std::thread writer([&]{guarded([&]{writer_loop();});});
     std::thread reader([&]{guarded([&]{reader_loop();});});
+    std::thread retire;
+    if(victim_cases) retire=std::thread([&]{guarded([&]{retire_case_loop();});});
     guarded([&]{for(unsigned sec=5;sec<=duration;sec+=5) {if(!pause(origin+std::chrono::seconds(sec))) break; sample();}});
     writer.join(); reader.join();
+    if(retire.joinable()) retire.join();
+    recent_stop=true;
+    if(observer.joinable()) observer.join();
     if(error) std::rethrow_exception(error);
     sample();
     unsigned last=duration/30-1;
     std::map<std::string,std::pair<uint64_t,unsigned>> expected;
-    for(unsigned g=last>=3?last-3:0;g<=last;++g) for(unsigned kind=0;kind<2;++kind)
+    for(unsigned g=last>=3?last-3:0;g<=last;++g) for(unsigned kind=0;kind<2;++kind) {
+      if(victim_cases&&kind==1&&g%3==2&&g*30+66<duration) continue;
       expected[anchor(g,kind)]={(kind?32:16)*kMiB,seed_for(g,kind)};
+    }
     for(unsigned kind=0;kind<2;++kind)
       expected[mutable_file(last,kind,0)]={(kind?224:240)*kMiB,100+last*31+kind*15};
     for(unsigned i=0;i<kFillers;++i) expected["/rrzc-stream/filler"+std::to_string(i)+".bin"]={256*kMiB,200+i};

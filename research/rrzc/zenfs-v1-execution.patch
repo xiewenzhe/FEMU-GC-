@@ -1,0 +1,182 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index d87dce445..b6f08c6ba 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -30,6 +30,7 @@
+ #include "snapshot.h"
+ #include "rrzc_weighted_selector.h"
+ #include "rrzc_urgency_selector.h"
++#include "rrzc_v1_execution.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -365,17 +366,26 @@ void ZenFS::GCWorker() {
+   }
+ 
+   const char* shadow_request=getenv("ZENFS_RRZC_V1_SHADOW");
+-  const bool shadow_enabled=shadow_request && strcmp(shadow_request,"1")==0 &&
+-      simple_enabled && !simple_weighted && !test_choice_pending;
++  const char* real_request=getenv("ZENFS_RRZC_V1_ENABLE");
++  const auto v1_mode=rrzc_v1::ResolveMode(shadow_request,real_request,
++      simple_enabled && !simple_weighted,test_choice_pending ||
++      (real_request && strcmp(real_request,"1")==0 && test_enable && strcmp(test_enable,"1")==0));
++  const bool shadow_enabled=v1_mode.observe;
++  const bool real_enabled=v1_mode.execute;
++  // 沿用已有后续追踪字段；影子或真实入口开启时才输出维护追踪。
+   v1_shadow_.store(shadow_enabled);
+-  // 初版仅观察固定实验参数；不是最终模型，也不据此实际改选。
++  // 沿用原影子固定实验参数，不调整预测规则、界限或预算。
+   const uint64_t shadow_horizon=10*rrzc_v1::kSecond;
+   const uint64_t shadow_extra_budget=16ULL<<20;
+   uint64_t shadow_round=0;
+   if (shadow_request && !shadow_enabled)
+     Error(logger_,"V1影子：入口关闭，要求有效量单区Greedy且不能混用加权或人工选区");
+-  if (shadow_enabled)
++  if (shadow_enabled && !real_enabled)
+     Info(logger_,"V1影子：已启用，实际仍Greedy，近期界限秒=10，额外有效搬运预算字节=%lu，不启用真实改选",shadow_extra_budget);
++  if (real_request && strcmp(real_request,"0")!=0 && !real_enabled)
++    Error(logger_,"V1真实：入口关闭，要求有效量单区Greedy，禁止混用影子、加权或人工选区");
++  if (real_enabled)
++    Info(logger_,"V1真实：已启用，沿用十秒界限及原近期预测，额外有效搬运预算字节=%lu，仅在原合格候选内改选",shadow_extra_budget);
+ 
+   while (run_gc_worker_) {
+     usleep(1000 * 1000 * 10);
+@@ -436,6 +446,9 @@ void ZenFS::GCWorker() {
+            pressure_status.ToString().c_str());
+     }
+     std::set<uint64_t> migrate_zones_start;
++    // 真实选区记录与本轮现有迁移结果关联；不把选中等同于迁移或Reset成功。
++    bool v1_selected=false, v1_switched=false;
++    uint64_t v1_actual_zone=0, v1_extra_valid=0;
+     uint64_t full_zones = 0, max_garbage_percent = 0;
+     uint64_t empty_zones = 0, partial_zones = 0, partial_capacity = 0;
+     for (const auto& zone : snapshot.zones_) {
+@@ -515,7 +528,7 @@ void ZenFS::GCWorker() {
+              c.target_available, c.pressure_available, space, risk, score_label,
+              rrzc_simple::Score(space, risk, simple_space_weight));
+       }
+-      const auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
++      auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
+                                                 simple_space_weight);
+       if (shadow_enabled) {
+         ++shadow_round;
+@@ -562,11 +575,39 @@ void ZenFS::GCWorker() {
+         }
+         const auto shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
+             simple_budget,shadow_horizon,shadow_extra_budget);
+-        Info(logger_,"V1影子决策：轮次=%lu，存在Greedy=%d，实际Greedy=%lu，影子建议=%lu，会改选=%d，额外有效搬运字节=%lu，预测达阈值纳秒=%lu，界限纳秒=%lu，预算字节=%lu，查询纳秒=%lu，帧可用=%d，原因=%s，查询状态=%s，实际改选=0",
++        if (!real_enabled)
++          Info(logger_,"V1影子决策：轮次=%lu，存在Greedy=%d，实际Greedy=%lu，影子建议=%lu，会改选=%d，额外有效搬运字节=%lu，预测达阈值纳秒=%lu，界限纳秒=%lu，预算字节=%lu，查询纳秒=%lu，帧可用=%d，原因=%s，查询状态=%s，实际改选=0",
+              shadow_round,shadow.greedy.found,shadow.greedy.found ? shadow.greedy.selected.zone : 0,
+              shadow.proposed_zone,shadow.would_switch,shadow.extra_valid,shadow.predicted_ns,
+              shadow_horizon,shadow_extra_budget,query_ns,frame_ok,shadow.reason,
+              recent_status.ToString().c_str());
++        if (real_enabled) {
++          const auto execution=rrzc_v1::ApplyDecision(decision,shadow,candidates,
++              simple_budget,shadow_extra_budget,true,[&](const rrzc_simple::Candidate& c) {
++                Zone* live=zbd_->GetIOZone(c.zone);
++                const auto first=diagnostic_before.find(c.zone);
++                const auto last=recent_after.find(c.zone);
++                const auto original=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
++                    [&](const ZoneSnapshot& x){return x.start==c.zone;});
++                const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
++                    std::chrono::steady_clock::now()-query_start).count();
++                return usable.count(c.zone) && elapsed<=static_cast<int64_t>(2*rrzc_v1::kSecond) &&
++                    live && original!=snapshot.zones_.end() &&
++                    first!=diagnostic_before.end() && last!=recent_after.end() &&
++                    live->wp_==original->wp && live->used_capacity_==c.valid &&
++                    IsMaintenanceWindowStable(first->second,last->second,live->GetResetState());
++              });
++          decision=execution.actual;
++          v1_selected=decision.found;
++          v1_switched=execution.switched;
++          v1_actual_zone=decision.found ? decision.selected.zone : 0;
++          v1_extra_valid=execution.extra_valid;
++          Info(logger_,"V1真实决策：轮次=%lu，存在Greedy=%d，GreedyZone=%lu，建议Zone=%lu，实际Zone=%lu，会改选=%d，实际改选=%d，建议额外有效搬运字节=%lu，实际额外有效搬运字节=%lu，预测达阈值纳秒=%lu，界限纳秒=%lu，预算字节=%lu，查询纳秒=%lu，帧可用=%d，原因=%s，查询状态=%s",
++               shadow_round,shadow.greedy.found,shadow.greedy.found ? shadow.greedy.selected.zone : 0,
++               shadow.proposed_zone,v1_actual_zone,shadow.would_switch,v1_switched,
++               shadow.extra_valid,v1_extra_valid,shadow.predicted_ns,shadow_horizon,
++               shadow_extra_budget,query_ns,frame_ok,execution.reason,recent_status.ToString().c_str());
++        }
+       }
+       if (decision.found) {
+         migrate_zones_start.clear();
+@@ -630,6 +671,10 @@ void ZenFS::GCWorker() {
+       MigrationStats stats;
+       ++zc_rounds_;
+       s = MigrateExtents(migrate_exts, &stats);
++      if (real_enabled && v1_selected)
++        Info(logger_,"V1真实维护结果：轮次=%lu，实际Zone=%lu，实际改选=%d，选择时额外有效搬运字节=%lu，本轮迁移字节=%lu，本轮重置区数=%lu，迁移成功=%d，状态=%s",
++             shadow_round,v1_actual_zone,v1_switched,v1_extra_valid,
++             stats.migrated_bytes,stats.reset_zones,s.ok(),s.ToString().c_str());
+       zc_migrated_bytes_ += stats.migrated_bytes;
+       zc_reset_zones_ += stats.reset_zones;
+       Info(logger_, "ZC 统计：轮次 %lu，本轮迁移 %lu 字节，本轮重置 %lu 个 Zone，累计迁移 %lu 字节，累计重置 %lu 个 Zone",
+diff --git a/fs/rrzc_v1_execution.h b/fs/rrzc_v1_execution.h
+new file mode 100644
+index 000000000..5a08edbb9
+--- /dev/null
++++ b/fs/rrzc_v1_execution.h
+@@ -0,0 +1,62 @@
++// V1真实选区的独立入口；不改变影子预测规则或历史加权选择器。
++#pragma once
++#include "rrzc_urgency_selector.h"
++#include <cstring>
++
++namespace rrzc_v1 {
++struct ExecutionMode {
++  bool observe = false, execute = false;
++};
++inline ExecutionMode ResolveMode(const char* shadow, const char* real,
++                                 bool valid_greedy, bool manual_requested) {
++  const bool s = shadow && std::strcmp(shadow, "1") == 0;
++  const bool r = real && std::strcmp(real, "1") == 0;
++  if (!valid_greedy || manual_requested || (s && r)) return {};
++  return {s || r, r};
++}
++struct ExecutionDecision {
++  rrzc_simple::Decision actual;
++  bool switched = false;
++  uint64_t extra_valid = 0;
++  const char* reason = "未启用真实改选";
++};
++// 选择前复核只负责拒绝过期快照；不重新预测、不新增候选或放宽预算。
++template<class Validate>
++inline ExecutionDecision ApplyDecision(
++    const rrzc_simple::Decision& greedy, const ShadowDecision& proposal,
++    const std::vector<rrzc_simple::Candidate>& candidates,
++    uint64_t reclaim_budget, uint64_t extra_budget, bool enabled,
++    Validate validate) {
++  ExecutionDecision out;
++  out.actual = greedy;
++  if (!enabled) return out;
++  out.reason = proposal.reason;
++  if (!greedy.found || !proposal.would_switch) return out;
++  if (!proposal.greedy.found || proposal.greedy.selected.zone != greedy.selected.zone ||
++      proposal.greedy.selected.valid != greedy.selected.valid) {
++    out.reason = "Greedy基准不一致，保持Greedy";
++    return out;
++  }
++  const auto chosen = std::find_if(candidates.begin(), candidates.end(),
++      [&](const rrzc_simple::Candidate& c) { return c.zone == proposal.proposed_zone; });
++  if (chosen == candidates.end() || chosen->zone == greedy.selected.zone ||
++      !rrzc_simple::Eligible(*chosen, reclaim_budget)) {
++    out.reason = "建议不在原合格候选内，保持Greedy";
++    return out;
++  }
++  const uint64_t extra = chosen->valid > greedy.selected.valid ?
++      chosen->valid - greedy.selected.valid : 0;
++  if (extra != proposal.extra_valid || extra > extra_budget) {
++    out.reason = "额外有效搬运预算复核失败，保持Greedy";
++    return out;
++  }
++  if (!validate(greedy.selected) || !validate(*chosen)) {
++    out.reason = "选择前快照复核失败，保持Greedy";
++    return out;
++  }
++  out.actual = rrzc_simple::Choose({*chosen}, reclaim_budget, false);
++  out.switched = true;
++  out.extra_valid = extra;
++  return out;
++}
++}  // 命名空间结束。

@@ -305,6 +305,10 @@ static void zns_reset_block_state(struct zns_ssd *zns, uint32_t zone_idx)
         ch_hi = ch_lo + cpz;
     }
 
+    if (zns->rr_history_enabled) {
+        qemu_mutex_lock(&zns->rr_history[zone_idx].lock);
+    }
+
     for (ch = ch_lo; ch < ch_hi; ch++) {
         for (lun = 0; lun < zns->num_lun; lun++) {
             for (pl = 0; pl < zns->num_plane; pl++) {
@@ -325,8 +329,20 @@ static void zns_reset_block_state(struct zns_ssd *zns, uint32_t zone_idx)
                 blk = get_blk(zns, &ppa);
                 blk->page_wp = 0;
                 qatomic_set(&blk->read_count, 0);
+                if (zns->rr_history_enabled) {
+                    uint32_t id = ((ch - ch_lo) * zns->num_lun + lun) *
+                                  zns->num_plane + pl;
+                    femu_rr_history_clear(&zns->rr_history[zone_idx].blocks[id]);
+                }
             }
         }
+    }
+
+    if (zns->rr_history_enabled) {
+        ZnsRrZoneHistory *h = &zns->rr_history[zone_idx];
+        h->generation++;
+        h->born_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+        qemu_mutex_unlock(&h->lock);
     }
 
     /* the zone starts filling from its first page again */
@@ -424,7 +440,23 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
 
         sublat = zns_advance_status(zns, &ppa, &srd);
         if (zns->rr_threshold) {
-            qatomic_inc(&get_blk(zns, &ppa)->read_count);
+            if (zns->rr_history_enabled) {
+                uint32_t groups = zns->num_ch / zns->chnls_per_zone;
+                uint32_t group = ppa.g.ch / zns->chnls_per_zone;
+                uint32_t zone = ppa.g.blk * groups + group;
+                uint32_t local_ch = ppa.g.ch % zns->chnls_per_zone;
+                uint32_t id = (local_ch * zns->num_lun + ppa.g.fc) *
+                              zns->num_plane + ppa.g.pl;
+                ZnsRrZoneHistory *h = &zns->rr_history[zone];
+                qemu_mutex_lock(&h->lock);
+                qatomic_inc(&get_blk(zns, &ppa)->read_count);
+                femu_rr_history_record(&h->blocks[id],
+                    qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
+                    zns->rr_history_max_events);
+                qemu_mutex_unlock(&h->lock);
+            } else {
+                qatomic_inc(&get_blk(zns, &ppa)->read_count);
+            }
         }
         ftl_debug("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
