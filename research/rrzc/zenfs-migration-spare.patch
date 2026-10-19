@@ -1,0 +1,121 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -222,6 +222,12 @@
+   const char *reserve_env = getenv("ZENFS_MIGRATE_RESERVE");
+   migration_reserve_enabled_ =
+       reserve_env != nullptr && strcmp(reserve_env, "1") == 0;
++  const char *spare_env = getenv("ZENFS_RRZC_MIGRATION_SPARE");
++  migration_spare_enabled_ = migration_reserve_enabled_ && spare_env != nullptr &&
++                             strcmp(spare_env, "1") == 0;
++  if (migration_spare_enabled_) {
++    Info(logger_, "公共迁移空替补配置：启用=1，当前目标之外独占一个空区，按片段接续，普通写入不使用替补");
++  }
+   if (migration_reserve_enabled_) {
+     Info(logger_, "开启实验迁移预留：专用目标不供普通写入使用；非原始分配基线");
+   }
+@@ -545,7 +551,7 @@
+             old && (old->IsEmpty() || rrzc_alloc::Enough(old->capacity_,old->max_capacity_)),
+             old && old->IsFull());
+         bool retained=false;
+-        if (empty_reserve && rotation.rotate) {
++        if (empty_reserve && !migration_spare_enabled_ && rotation.rotate) {
+           const uint64_t old_start=old ? old->start_ : 0;
+           const uint64_t old_remaining=old ? old->capacity_ : 0;
+           const bool token=rotation.need_token && GetActiveIOZoneTokenIfAvailable();
+@@ -864,6 +870,34 @@
+ 
+ // 调用者须持有 migration_reserve_mtx_；空区只锁定，不提前写入或擦除。
+ IOStatus ZonedBlockDevice::EnsureMigrationReserve() {
++  if (migration_spare_enabled_) {
++    // 两个指针的归属只在预留锁内改变；这里不读在途目标的可变容量。
++    if (migration_reserve_zone_ == nullptr && migration_spare_zone_ != nullptr) {
++      migration_reserve_zone_ = migration_spare_zone_;
++      migration_spare_zone_ = nullptr;
++      Info(logger_, "公共迁移替补接续：新当前Zone=%lu，原当前已释放，空替补提升=1",
++           migration_reserve_zone_->start_);
++    }
++    for (auto *zone : io_zones) {
++      if (migration_reserve_zone_ != nullptr && migration_spare_zone_ != nullptr)
++        break;
++      if (!zone->Acquire()) continue;
++      if (zone->IsEmpty()) {
++        if (migration_reserve_zone_ == nullptr) {
++          migration_reserve_zone_ = zone;
++          Info(logger_, "迁移预留取得空区：Zone=%lu", zone->start_);
++        } else {
++          migration_spare_zone_ = zone;
++          Info(logger_, "公共迁移空替补取得：Zone=%lu，容量字节=%lu，普通写入不可取得=1",
++               zone->start_, zone->capacity_);
++        }
++      } else {
++        auto s = zone->CheckRelease();
++        if (!s.ok()) return s;
++      }
++    }
++    return IOStatus::OK();
++  }
+   if (migration_reserve_zone_ != nullptr) return IOStatus::OK();
+   for (auto *zone : io_zones) {
+     if (!zone->Acquire()) continue;
+@@ -975,25 +1009,40 @@
+       if (!reserved->IsUsed()) {
+         s = reserved->Reset();
+       } else {
+-        Zone *replacement = nullptr;
+-        for (auto *zone : io_zones) {
+-          if (!zone->Acquire()) continue;
+-          if (zone->IsEmpty() && zone->capacity_ >= min_capacity) {
+-            replacement = zone;
+-            break;
++        const bool use_spare = migration_spare_enabled_ &&
++                               migration_spare_zone_ != nullptr;
++        Zone *replacement = use_spare ? migration_spare_zone_ : nullptr;
++        if (use_spare && (!replacement->IsEmpty() ||
++                          replacement->capacity_ < min_capacity)) {
++          s = IOStatus::Corruption("迁移空替补状态或容量不符合约定");
++        }
++        if (!replacement) {
++          for (auto *zone : io_zones) {
++            if (!zone->Acquire()) continue;
++            if (zone->IsEmpty() && zone->capacity_ >= min_capacity) {
++              replacement = zone;
++              break;
++            }
++            s = zone->CheckRelease();
++            if (!s.ok()) break;
+           }
+-          s = zone->CheckRelease();
+-          if (!s.ok()) break;
+         }
+         if (s.ok() && replacement != nullptr) {
+           s = reserved->Finish();
+           if (s.ok()) {
+             migration_reserve_zone_ = replacement;
++            if (use_spare) migration_spare_zone_ = nullptr;
+             s = reserved->CheckRelease();
+             Info(logger_, "迁移预留替换：旧Zone=%lu，新Zone=%lu",
+                  reserved->start_, replacement->start_);
++            if (use_spare) {
++              Info(logger_, "公共迁移替补接续：旧Zone=%lu，新当前Zone=%lu，需要字节=%u，空替补提升=1",
++                   reserved->start_, replacement->start_, min_capacity);
++              if (s.ok()) s = EnsureMigrationReserve();
++            }
+           } else {
+-            auto release_status = replacement->CheckRelease();
++            // Finish失败时，已登记的空替补仍属于预留池，不能释放给普通写入。
++            auto release_status = use_spare ? IOStatus::OK() : replacement->CheckRelease();
+             if (!release_status.ok()) s = release_status;
+           }
+         } else if (s.ok()) {
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -216,6 +216,9 @@
+   // 专用迁移区始终持有 busy 标志，不占普通 IO 的令牌；使用已有预留配额。
+   std::mutex migration_reserve_mtx_;
+   Zone *migration_reserve_zone_ = nullptr;
++  // 替补始终为空且独占，尚未写入，不占普通活跃令牌。
++  bool migration_spare_enabled_ = false;
++  Zone *migration_spare_zone_ = nullptr;
+   IOStatus EnsureMigrationReserve();
+ 
+   void EncodeJsonZone(std::ostream &json_stream,
