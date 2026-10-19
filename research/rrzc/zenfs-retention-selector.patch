@@ -1,0 +1,143 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index b3875e0dd..15ad2a8a3 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -39,6 +39,7 @@
+ #include "rrzc_cost_rank.h"
+ #include "rrzc_recent_sampler.h"
+ #include "rrzc_pair_rate.h"
++#include "rrzc_retention_selector.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -75,6 +76,46 @@ static void LogCostFrame(const std::shared_ptr<Logger>& logger,
+          p.host_generation,p.host_sequence,p.valid,p.known);
+ }
+ 
++// 仅尝试占用单个Zone，不等待业务；Reset前点必须早于设备查询，避免拼接旧设备代际。
++static rrzc_retention::Frame ReadRetentionFrame(ZonedBlockDevice* device,
++    const rrzc_v1::RecentReport& report,const std::map<uint64_t,ZoneResetState>& before,
++    const rrzc_observe::MigrationWindow::Frame& marker,rrzc_observe::MigrationWindow* tracker) {
++  rrzc_retention::Frame frame;
++  frame.session_hi=report.session_hi; frame.session_lo=report.session_lo; frame.before=marker;
++  for (const auto& b:report.zones) {
++    Zone* zone=device->GetIOZone(b.zone);
++    if (!zone) continue;
++    rrzc_retention::Point p; p.zone=b.zone; p.device_generation=b.generation;
++    p.time=std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++    if (zone->Acquire()) {
++      const auto first=before.find(b.zone); const auto reset=zone->GetResetState();
++      p.valid=zone->used_capacity_.load(); p.host_generation=reset.generation;
++      p.host_sequence=reset.sequence;
++      p.known=zone->IsFull() && first!=before.end() &&
++          IsMaintenanceWindowStable(first->second,reset,reset);
++      if (!zone->Release()) p.known=false;
++    }
++    frame.zones.emplace(p.zone,p);
++  }
++  frame.after=tracker->Freeze();
++  return frame;
++}
++
++static void LogRetentionFrame(const std::shared_ptr<Logger>& logger,
++    const rrzc_retention::Frame& frame,const char* stage,uint64_t round) {
++  for (const auto& item:frame.zones) {
++    const auto& p=item.second;
++    const auto a=frame.before.Get(p.zone),b=frame.after.Get(p.zone);
++    Info(logger,"留存原始采样：阶段=%s，轮次=%lu，会话=%lu/%lu，Zone=%lu，时点纳秒=%lu，有效字节=%lu，可知满区=%d，设备代际=%lu，主机代际=%lu，主机序号=%lu，迁移实例=%lu，迁移创建纳秒=%lu，迁移前纳秒=%lu，迁移后纳秒=%lu，迁移可信=%d，迁移序号=%lu/%lu，迁移活动=%lu/%lu，迁移末次结束=%lu/%lu",
++         stage,round,frame.session_hi,frame.session_lo,p.zone,p.time,p.valid,p.known,
++         p.device_generation,p.host_generation,p.host_sequence,frame.before.owner,
++         frame.before.created_ns,frame.before.captured_ns,frame.after.captured_ns,
++         frame.before.reliable && frame.after.reliable && frame.before.owner==frame.after.owner,
++         a.sequence,b.sequence,a.active,b.active,a.last_end_ns,b.last_end_ns);
++  }
++}
++
+ static void LogMaintenanceObservation(
+     const std::shared_ptr<Logger>& logger, ZonedBlockDevice* device,
+     const char* stage, const ZoneSnapshot& zone, const ZoneReadPressure* pressure,
+@@ -425,14 +466,30 @@ void ZenFS::GCWorker() {
+   const bool pair_rate=rrzc_v1::PairRateEnabled(getenv("ZENFS_RRZC_PAIR_RATE_SHADOW"),
+       independent_sampling,guarded.observe,guarded.execute);
+   rrzc_v1::PairRateHistory pair_history;
++  const char* retention_request=getenv("ZENFS_RRZC_RETENTION_MODE");
++  const bool retention_enabled=guarded.observe && independent_sampling &&
++      migration_window_.Enabled() && !tail_ablation.requested && retention_request &&
++      (!strcmp(retention_request,"observe") || !strcmp(retention_request,"execute"));
++  const bool retention_execute=retention_enabled && guarded.execute && !cost_rank &&
++      !strcmp(retention_request,"execute");
++  rrzc_retention::Store retention_history;
++  Info(logger_,"留存收益配置：采样=%d，执行=%d，外推秒=10，窗口秒=10/30，未知回退Greedy，原RR和GC条件不变",
++       retention_enabled,retention_execute);
+   // 局部对象先于GCWorker退出销毁并等待查询完成；设备仍由ZenFS持有。
+   rrzc_v1::RecentSampler recent_sampler([&](rrzc_v1::RecentReport* sample) {
++    const auto marker=retention_enabled ? migration_window_.Freeze() : rrzc_observe::MigrationWindow::Frame{};
++    const auto resets=retention_enabled ? zbd_->GetZoneResetStates() : std::map<uint64_t,ZoneResetState>{};
+     const auto begin=std::chrono::steady_clock::now();
+     const IOStatus status=zbd_->GetZoneRecentReads(sample);
+     const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
+         std::chrono::steady_clock::now()-begin).count();
+     const bool good=status.ok() && elapsed<=static_cast<int64_t>(2*rrzc_v1::kSecond);
+     if (pair_rate) pair_history.Publish(*sample,good);
++    if (retention_enabled) {
++      auto frame=ReadRetentionFrame(zbd_,*sample,resets,marker,&migration_window_);
++      LogRetentionFrame(logger_,frame,"采样",0);
++      retention_history.Publish(std::move(frame),good);
++    }
+     Info(logger_,"独立近期采样：可用=%d，主机结束纳秒=%lu，查询纳秒=%ld，设备会话=%lu/%lu，区数=%zu，状态=%s",
+          good,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count()),
+@@ -665,12 +722,16 @@ void ZenFS::GCWorker() {
+           Info(logger_,"独立近期采样冻结：轮次=%lu，发布序号=%lu",shadow_round,frozen.sequence);
+         }
+         const auto query_start=std::chrono::steady_clock::now();
++        const auto retention_frozen=retention_history.Freeze();
+         rrzc_v1::RecentReport recent;
+         const IOStatus recent_status=zbd_->GetZoneRecentReads(&recent);
+         const uint64_t query_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now()-query_start).count();
+         const auto recent_after=zbd_->GetZoneResetStates();
+         const auto migration_after=migration_window_.Freeze();
++        const auto retention_current=retention_enabled ? ReadRetentionFrame(zbd_,recent,
++            diagnostic_before,migration_before,&migration_window_) : rrzc_retention::Frame{};
++        if (retention_enabled) LogRetentionFrame(logger_,retention_current,"选区",shadow_round);
+         std::map<uint64_t,rrzc_v1::RecentBlock> usable;
+         const bool frame_ok=recent_status.ok() && pressure_status.ok() &&
+             recent.threshold==pressure.read_threshold &&
+@@ -774,12 +835,34 @@ void ZenFS::GCWorker() {
+           if (guarded.observe) {
+             const auto eta_proposal=rrzc_v1::EvaluateShortShadow(candidates,usable,growth.evidence,
+                 recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
+-            const auto proposal=cost_rank ? rrzc_rank::Evaluate(true,candidates,usable,growth.evidence,
++            auto proposal=cost_rank ? rrzc_rank::Evaluate(true,candidates,usable,growth.evidence,
+                 recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget) : eta_proposal;
+             Info(logger_,"成本排序核验：轮次=%lu，启用=%d，ETA建议Zone=%lu，生效建议Zone=%lu，排序改变=%d，ETA预测纳秒=%lu，生效预测纳秒=%lu，ETA额外字节=%lu，生效额外字节=%lu",
+                  shadow_round,cost_rank,eta_proposal.proposed_zone,proposal.proposed_zone,
+                  eta_proposal.proposed_zone!=proposal.proposed_zone,eta_proposal.predicted_ns,
+                  proposal.predicted_ns,eta_proposal.extra_valid,proposal.extra_valid);
++            if (retention_enabled) {
++              std::map<uint64_t,rrzc_retention::Forecast> forecasts;
++              for (const auto& c:candidates) {
++                auto point=retention_current.zones.find(c.zone);
++                rrzc_retention::Forecast f;
++                if (frame_ok && usable.count(c.zone) && point!=retention_current.zones.end() &&
++                    point->second.valid==c.valid)
++                  f=retention_frozen.Check(retention_current,point->second,shadow_horizon);
++                forecasts.emplace(c.zone,f);
++                const uint64_t extra=proposal.greedy.found && c.valid>proposal.greedy.selected.valid ?
++                    c.valid-proposal.greedy.selected.valid : 0;
++                Info(logger_,"留存收益候选：轮次=%lu，Zone=%lu，可知=%d，有效字节=%lu，十秒减少字节=%lu，三十秒减少字节=%lu，十秒实际间隔纳秒=%lu，三十秒实际间隔纳秒=%lu，预计保留字节=%lu，额外迁移字节=%lu，净收益字节=%lu，原因=%s",
++                     shadow_round,c.zone,f.known,c.valid,f.loss10,f.loss30,f.interval10,f.interval30,
++                     f.retained,extra,f.known && f.retained>extra ? f.retained-extra : 0,f.reason);
++              }
++              const auto retained=rrzc_retention::Evaluate(candidates,usable,growth.evidence,forecasts,
++                  recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++              Info(logger_,"留存收益建议：轮次=%lu，执行=%d，原建议Zone=%lu，新建议Zone=%lu，会改选=%d，额外字节=%lu，预测纳秒=%lu，原因=%s",
++                   shadow_round,retention_execute,proposal.proposed_zone,retained.proposed_zone,
++                   retained.would_switch,retained.extra_valid,retained.predicted_ns,retained.reason);
++              if (retention_execute) proposal=retained;
++            }
+             std::map<uint64_t,rrzc_guard::Bounds> bounds;
+             for (const auto& c:candidates) {
+               auto& summary=bounds[c.zone];

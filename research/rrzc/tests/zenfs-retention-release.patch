@@ -1,0 +1,12 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -101,7 +101,7 @@ static rrzc_retention::Frame ReadRetentionFrame(ZonedBlockDevice* device,
+       p.host_sequence=reset.sequence;
+       p.known=zone->IsFull() && first!=before.end() &&
+           IsMaintenanceWindowStable(first->second,reset,reset);
+-      if (!zone->CheckRelease().ok()) p.known=false;
++      if (!zone->Release()) p.known=false;
+     }
+     frame.zones.emplace(p.zone,p);
+   }

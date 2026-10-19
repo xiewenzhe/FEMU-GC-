@@ -1,0 +1,18 @@
+diff --git a/rocksdb/rocksdb_db.cc b/rocksdb/rocksdb_db.cc
+--- a/rocksdb/rocksdb_db.cc
++++ b/rocksdb/rocksdb_db.cc
+@@ -9,3 +9,4 @@
+ #include "rocksdb_db.h"
++#include <iostream>
+ 
+ #include "core/core_workload.h"
+@@ -202,6 +202,9 @@ void RocksdbDB::Init() {
+   opt.create_if_missing = true;
+   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
+   GetOptions(props, &opt, &cf_descs);
++  // 默认仍写WAL；仅显式无WAL实验启用，不代表崩溃持久性。
++  wopt_.disableWAL=utils::StrToBool(props.GetProperty("rocksdb.disable_wal","false"));
++  std::cerr<<"实验WAL配置：关闭="<<wopt_.disableWAL<<std::endl;
+ #ifdef USE_MERGEUPDATE
+   opt.merge_operator.reset(new YCSBUpdateMerge);
+ #endif

@@ -1,0 +1,179 @@
+diff --git a/core/db_wrapper.h b/core/db_wrapper.h
+index 423e139..f7cf96e 100644
+--- a/core/db_wrapper.h
++++ b/core/db_wrapper.h
+@@ -15,6 +15,7 @@
+ #include "measurements.h"
+ #include "utils/timer.h"
+ #include "utils/utils.h"
++#include "rrzc_ycsb_audit.h"
+ 
+ namespace ycsbc {
+ 
+@@ -28,6 +29,7 @@ class DBWrapper : public DB {
+     db_->Init();
+   }
+   void Cleanup() {
++    rrzc_ycsb::Save();
+     db_->Cleanup();
+   }
+   Status Read(const std::string &table, const std::string &key,
+@@ -35,6 +37,7 @@ class DBWrapper : public DB {
+     timer_.Start();
+     Status s = db_->Read(table, key, fields, result);
+     uint64_t elapsed = timer_.End();
++    rrzc_ycsb::Record('R',key,result,s);
+     if (s == kOK) {
+       measurements_->Report(READ, elapsed);
+     } else {
+@@ -58,6 +61,7 @@ class DBWrapper : public DB {
+     timer_.Start();
+     Status s = db_->Update(table, key, values);
+     uint64_t elapsed = timer_.End();
++    rrzc_ycsb::Record('U',key,values,s);
+     if (s == kOK) {
+       measurements_->Report(UPDATE, elapsed);
+     } else {
+@@ -69,6 +73,7 @@ class DBWrapper : public DB {
+     timer_.Start();
+     Status s = db_->Insert(table, key, values);
+     uint64_t elapsed = timer_.End();
++    rrzc_ycsb::Record('I',key,values,s);
+     if (s == kOK) {
+       measurements_->Report(INSERT, elapsed);
+     } else {
+diff --git a/core/measurements.cc b/core/measurements.cc
+index d78312c..6ca14c1 100644
+--- a/core/measurements.cc
++++ b/core/measurements.cc
+@@ -79,7 +79,8 @@ HdrHistogramMeasurements::HdrHistogramMeasurements() {
+ }
+ 
+ void HdrHistogramMeasurements::Report(Operation op, uint64_t latency) {
+-  hdr_record_value_atomic(histogram_[op], latency);
++  if (!hdr_record_value_atomic(histogram_[op], latency)) throw utils::Exception("延迟超出直方图范围");
++  latency_sum_[op].fetch_add(latency,std::memory_order_relaxed);
+ }
+ 
+ std::string HdrHistogramMeasurements::GetStatusMsg() {
+@@ -96,7 +97,8 @@ std::string HdrHistogramMeasurements::GetStatusMsg() {
+                << " Count=" << cnt
+                << " Max=" << hdr_max(histogram_[op]) / 1000.0
+                << " Min=" << hdr_min(histogram_[op]) / 1000.0
+-               << " Avg=" << hdr_mean(histogram_[op]) / 1000.0
++               << " Avg=" << double(latency_sum_[op].load(std::memory_order_relaxed))/cnt/1000.0
++               << " 95=" << hdr_value_at_percentile(histogram_[op], 95) / 1000.0
+                << " 90=" << hdr_value_at_percentile(histogram_[op], 90) / 1000.0
+                << " 99=" << hdr_value_at_percentile(histogram_[op], 99) / 1000.0
+                << " 99.9=" << hdr_value_at_percentile(histogram_[op], 99.9) / 1000.0
+@@ -110,6 +112,7 @@ std::string HdrHistogramMeasurements::GetStatusMsg() {
+ void HdrHistogramMeasurements::Reset() {
+   for (int op = 0; op < MAXOPTYPE; op++) {
+     hdr_reset(histogram_[op]);
++    latency_sum_[op].store(0,std::memory_order_relaxed);
+   }
+ }
+ #endif
+diff --git a/core/measurements.h b/core/measurements.h
+index b068008..750c51c 100644
+--- a/core/measurements.h
++++ b/core/measurements.h
+@@ -50,6 +50,8 @@ class HdrHistogramMeasurements : public Measurements {
+   void Reset() override;
+  private:
+   hdr_histogram *histogram_[MAXOPTYPE];
++  // 用原始纳秒和计算均值，避免把直方图桶中心均值称作精确平均值。
++  std::atomic<uint64_t> latency_sum_[MAXOPTYPE]{};
+ };
+ #endif
+ 
+diff --git a/core/uniform_generator.h b/core/uniform_generator.h
+index eb55b71..1fcd929 100644
+--- a/core/uniform_generator.h
++++ b/core/uniform_generator.h
+@@ -10,6 +10,7 @@
+ #define YCSB_C_UNIFORM_GENERATOR_H_
+ 
+ #include "generator.h"
++#include "utils/utils.h"
+ 
+ #include <atomic>
+ #include <cstdint>
+@@ -32,7 +33,7 @@ class UniformGenerator : public Generator<uint64_t> {
+ };
+ 
+ inline uint64_t UniformGenerator::Next() {
+-  static thread_local std::mt19937_64 generator(std::random_device{}());
++  static thread_local std::mt19937_64 generator(utils::ExperimentSeed(3));
+   std::uniform_int_distribution<uint64_t> dist(min_, max_);
+   uint64_t next = dist(generator);
+   last_int_.store(next, std::memory_order_relaxed);
+diff --git a/core/ycsbc.cc b/core/ycsbc.cc
+index d7efe90..00f96c1 100644
+--- a/core/ycsbc.cc
++++ b/core/ycsbc.cc
+@@ -123,6 +123,9 @@ int main(const int argc, const char *argv[]) {
+   }
+ 
+   const int num_threads = stoi(props.GetProperty("threadcount", "1"));
++  if (std::getenv("YCSB_AUDIT_PREFIX") && num_threads!=1) {
++    std::cerr<<"请求审计仅允许已登记的单线程实验"<<std::endl; return 1;
++  }
+ 
+   ycsbc::Measurements *measurements = ycsbc::CreateMeasurements(&props);
+   if (measurements == nullptr) {
+diff --git a/rocksdb/rocksdb_db.cc b/rocksdb/rocksdb_db.cc
+index 8d5f373..2ca871a 100644
+--- a/rocksdb/rocksdb_db.cc
++++ b/rocksdb/rocksdb_db.cc
+@@ -343,6 +343,8 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
+     }
+ 
+     rocksdb::BlockBasedTableOptions table_options;
++    // 显式实验选项；缓存大小零的上游默认行为保持不变。
++    table_options.no_block_cache=props.GetProperty("rocksdb.no_block_cache","false")=="true";
+     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
+     if (cache_size > 0) {
+       block_cache = rocksdb::NewLRUCache(cache_size);
+diff --git a/utils/utils.h b/utils/utils.h
+index 1938e2e..a9ff8d6 100644
+--- a/utils/utils.h
++++ b/utils/utils.h
+@@ -15,6 +15,7 @@
+ #include <exception>
+ #include <random>
+ #include <locale>
++#include <cstdlib>
+ 
+ #if defined(_MSC_VER)
+ #if _MSC_VER >= 1911
+@@ -30,6 +31,12 @@ namespace ycsbc {
+ 
+ namespace utils {
+ 
++// 仅显式单线程配对实验固定种子；未配置时保持上游随机初始化。
++inline uint64_t ExperimentSeed(uint64_t salt) {
++  const char* value=std::getenv("YCSB_RANDOM_SEED");
++  return value ? std::stoull(value)+salt : std::random_device{}();
++}
++
+ const uint64_t kFNVOffsetBasis64 = 0xCBF29CE484222325ull;
+ const uint64_t kFNVPrime64 = 1099511628211ull;
+ 
+@@ -49,14 +56,12 @@ inline uint64_t FNVHash64(uint64_t val) {
+ inline uint64_t Hash(uint64_t val) { return FNVHash64(val); }
+ 
+ inline uint32_t ThreadLocalRandomInt() {
+-  static thread_local std::random_device rd;
+-  static thread_local std::minstd_rand rn(rd());
++  static thread_local std::minstd_rand rn(ExperimentSeed(1));
+   return rn();
+ }
+ 
+ inline double ThreadLocalRandomDouble() {
+-  static thread_local std::random_device rd;
+-  static thread_local std::minstd_rand rn(rd());
++  static thread_local std::minstd_rand rn(ExperimentSeed(2));
+   static thread_local std::uniform_real_distribution<double> uniform(0.0, 1.0);
+   return uniform(rn);
+ }
