@@ -5,3 +5,4 @@ __pycache__/
 *.img
 # 根目录忽略 Markdown；此处保留研究记录。
 !README.md
+!V1影子验证说明.md
