@@ -1,0 +1,301 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index 52dc41bff..f5f20ef97 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -33,6 +33,7 @@
+ #include "rrzc_v1_execution.h"
+ #include "rrzc_v1_growth.h"
+ #include "rrzc_short_shadow.h"
++#include "rrzc_cost_observe.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -51,6 +52,24 @@ static bool IsMaintenanceWindowStable(const ZoneResetState& before,
+          before.generation == after.generation && after.generation == current.generation;
+ }
+ 
++static rrzc_cost::ValidityFrame ReadCostFrame(ZonedBlockDevice* device,
++                                             const rrzc_v1::RecentReport& report) {
++  rrzc_cost::ValidityFrame frame;
++  frame.session_hi=report.session_hi; frame.session_lo=report.session_lo;
++  const uint64_t now=std::chrono::duration_cast<std::chrono::nanoseconds>(
++      std::chrono::steady_clock::now().time_since_epoch()).count();
++  frame.zones=device->GetCostValidityReadings(report,now);
++  return frame;
++}
++
++static void LogCostFrame(const std::shared_ptr<Logger>& logger,
++                          const rrzc_cost::ValidityFrame& frame,const char* stage) {
++  for (const auto& p:frame.zones)
++    Info(logger,"成本有效量采样：阶段=%s，会话=%lu/%lu，Zone=%lu，时点纳秒=%lu，设备代际=%lu，主机代际=%lu，主机序号=%lu，有效字节=%lu，可知=%d",
++         stage,frame.session_hi,frame.session_lo,p.zone,p.time_ns,p.device_generation,
++         p.host_generation,p.host_sequence,p.valid,p.known);
++}
++
+ static void LogMaintenanceObservation(
+     const std::shared_ptr<Logger>& logger, ZonedBlockDevice* device,
+     const char* stage, const ZoneSnapshot& zone, const ZoneReadPressure* pressure,
+@@ -380,6 +399,8 @@ void ZenFS::GCWorker() {
+       getenv("ZENFS_RRZC_V1_GROWTH"),shadow_enabled);
+   const bool short_enabled=rrzc_v1::ShortShadowEnabled(
+       short_request,shadow_enabled,real_enabled,growth_enabled);
++  const bool cost_enabled=rrzc_cost::Enabled(getenv("ZENFS_RRZC_COST_OBSERVE"),short_enabled);
++  rrzc_cost::ValidityHistory cost_history;
+   rrzc_v1::GrowthHistory growth_history;
+   // 沿用已有后续追踪字段；影子或真实入口开启时才输出维护追踪。
+   v1_shadow_.store(shadow_enabled);
+@@ -401,6 +422,8 @@ void ZenFS::GCWorker() {
+     Error(logger_,"短期影子：入口关闭，要求有效量Greedy、原影子和增长采样，禁止混用真实入口");
+   if (short_enabled)
+     Info(logger_,"短期影子：已启用，同块近期速率用于建议准入，界限秒=10，额外搬运预算字节=%lu，实际仍Greedy，不执行新建议",shadow_extra_budget);
++  if (cost_enabled)
++    Info(logger_,"成本观察：已启用，仅记录有效量端点变化、回收差和当前预留尾部；不修改任何建议或实际选择");
+ 
+   while (run_gc_worker_) {
+     if (!growth_enabled) {
+@@ -419,6 +442,12 @@ void ZenFS::GCWorker() {
+             std::chrono::steady_clock::now()-begin).count();
+         const bool good=status.ok() && elapsed<=static_cast<int64_t>(2*rrzc_v1::kSecond);
+         if (good) growth_history.Push(sample); else growth_history.Clear();
++        if (cost_enabled) {
++          if (good) {
++            auto frame=ReadCostFrame(zbd_,sample);
++            LogCostFrame(logger_,frame,"等待"); cost_history.Push(std::move(frame));
++          } else cost_history.Clear();
++        }
+         Info(logger_,"V1增长采样：可用=%d，查询纳秒=%ld，设备会话=%lu/%lu，区数=%zu，状态=%s",
+              good,static_cast<long>(elapsed),sample.session_hi,sample.session_lo,
+              sample.zones.size(),status.ToString().c_str());
+@@ -634,6 +663,55 @@ void ZenFS::GCWorker() {
+             // 新建议仅写日志，不赋给shadow或实际decision，也不调用真实ApplyDecision。
+             const auto suggestion=rrzc_v1::EvaluateShortShadow(candidates,usable,growth.evidence,
+                 recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++            if (cost_enabled) {
++              if (!frame_ok) cost_history.Clear();
++              auto current=ReadCostFrame(zbd_,recent);
++              LogCostFrame(logger_,current,"选区");
++              const auto target=zbd_->GetMigrationReserveObservation();
++              Info(logger_,"成本预留观察：轮次=%lu，启用=%d，可知=%d，存在=%d，Zone=%lu，剩余字节=%lu，有效字节=%lu，写指针=%lu，主机代际=%lu，主机序号=%lu，原因=%s",
++                   shadow_round,target.enabled,target.known,target.present,target.zone,target.remaining,
++                   target.valid,target.wp,target.host_generation,target.host_sequence,target.reason);
++              for (const auto& c:candidates) {
++                auto p=std::find_if(current.zones.begin(),current.zones.end(),
++                    [&](const rrzc_cost::ValidityPoint& x){return x.zone==c.zone;});
++                if (p==current.zones.end()) continue;
++                const auto reset=recent_after.find(c.zone);
++                p->known=p->known && frame_ok && p->valid==c.valid && usable.count(c.zone) &&
++                    reset!=recent_after.end() && reset->second.generation==p->host_generation &&
++                    reset->second.sequence==p->host_sequence;
++                for (const uint64_t window:{10*rrzc_cost::kSecond,30*rrzc_cost::kSecond}) {
++                  const auto change=cost_history.Check(current,*p,window);
++                  Info(logger_,"成本有效量变化：轮次=%lu，Zone=%lu，窗口秒=%lu，当前时点纳秒=%lu，当前有效字节=%lu，当前可知=%d，历史可知=%d，有前点=%d，前时点纳秒=%lu，前有效字节=%lu，间隔纳秒=%lu，减少字节=%lu，增加字节=%lu，原因=%s",
++                       shadow_round,c.zone,window/rrzc_cost::kSecond,p->time_ns,p->valid,p->known,
++                       change.known,change.has_previous,change.previous.time_ns,change.previous.valid,
++                       change.interval_ns,change.decreased,change.increased,change.reason);
++                }
++                uint64_t count=0,covered=0,lower=0,upper=0,maximum=0,first_lower=0,first_upper=0;
++                bool physical_known=true;
++                for (const auto& file:snapshot.zone_files_) for (const auto& ext:file.extents) {
++                  if (ext.zone_start!=c.zone) continue;
++                  const auto bounds=rrzc_cost::BoundPhysical(ext.length,zbd_->GetBlockSize(),ZoneFile::SPARSE_HEADER_SIZE);
++                  ++count; covered+=ext.length; physical_known=physical_known && bounds.known;
++                  lower+=bounds.lower; upper+=bounds.upper; maximum=std::max(maximum,bounds.upper);
++                  if (count==1) { first_lower=bounds.lower; first_upper=bounds.upper; }
++                  Info(logger_,"成本片段观察：轮次=%lu，Zone=%lu，次序=%lu，文件编号=%lu，文件名=%s，源片段=%lu，逻辑字节=%lu，物理界限可知=%d，物理下界字节=%lu，物理上界字节=%lu",
++                       shadow_round,c.zone,count,file.file_id,file.filename.c_str(),ext.start,ext.length,
++                       bounds.known,bounds.lower,bounds.upper);
++                }
++                const uint64_t greedy_valid=suggestion.greedy.found ? suggestion.greedy.selected.valid : 0;
++                const uint64_t greedy_reclaim=suggestion.greedy.found ?
++                    suggestion.greedy.selected.capacity-greedy_valid : 0;
++                const uint64_t reclaim=c.capacity-c.valid;
++                Info(logger_,"成本候选观察：轮次=%lu，Zone=%lu，是Greedy=%d，是影子建议=%d，原资格=%d，有效字节=%lu，回收字节=%lu，额外有效字节=%lu，回收损失字节=%lu，片段数=%lu，覆盖字节=%lu，物理界限可知=%d，物理总下界字节=%lu，物理总上界字节=%lu，最大物理上界字节=%lu，首片段下界字节=%lu，首片段上界字节=%lu，预留首片段确定不适配=%d，预留全部片段确定可容纳=%d，实际改选=0",
++                     shadow_round,c.zone,suggestion.greedy.found && c.zone==suggestion.greedy.selected.zone,
++                     suggestion.would_switch && c.zone==suggestion.proposed_zone,rrzc_simple::Eligible(c,simple_budget),
++                     c.valid,reclaim,suggestion.greedy.found && c.valid>greedy_valid ? c.valid-greedy_valid : 0,
++                     suggestion.greedy.found && greedy_reclaim>reclaim ? greedy_reclaim-reclaim : 0,
++                     count,covered,physical_known,lower,upper,maximum,first_lower,first_upper,
++                     target.known && target.present && physical_known && count && first_lower>target.remaining,
++                     target.known && target.present && physical_known && count && upper<=target.remaining);
++              }
++            }
+             for (const auto& c:candidates) {
+               const auto b=usable.find(c.zone);
+               const auto eta=b==usable.end() ? rrzc_v1::Estimate{} :
+diff --git a/fs/zbd_zenfs.cc b/fs/zbd_zenfs.cc
+index ade25feac..621430ee0 100644
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -1173,6 +1173,50 @@ std::map<uint64_t, ZoneResetState> ZonedBlockDevice::GetZoneResetStates() const
+   return states;
+ }
+ 
++std::vector<rrzc_cost::ValidityPoint> ZonedBlockDevice::GetCostValidityReadings(
++    const rrzc_v1::RecentReport& report, uint64_t time_ns) const {
++  std::vector<rrzc_cost::ValidityPoint> out;
++  for (const auto* zone:io_zones) {
++    const auto before=zone->GetResetState();
++    const uint64_t valid=zone->used_capacity_.load();
++    const auto after=zone->GetResetState();
++    const auto b=std::find_if(report.zones.begin(),report.zones.end(),
++        [&](const rrzc_v1::RecentBlock& x){return x.zone==zone->start_;});
++    rrzc_cost::ValidityPoint p;
++    p.zone=zone->start_; p.time_ns=time_ns; p.valid=valid;
++    p.host_generation=after.generation; p.host_sequence=after.sequence;
++    if (b!=report.zones.end()) p.device_generation=b->generation;
++    p.known=b!=report.zones.end() && before.stable && after.stable &&
++        before.known && after.known && before.generation==after.generation &&
++        before.sequence==after.sequence;
++    out.push_back(p);
++  }
++  return out;
++}
++
++rrzc_cost::ReserveObservation ZonedBlockDevice::GetMigrationReserveObservation() {
++  rrzc_cost::ReserveObservation out;
++  out.enabled=migration_reserve_enabled_;
++  if (!out.enabled) return out;
++  // 只尝试已有管理锁；不等待迁移、不Acquire任何Zone，也不补充预留。
++  std::unique_lock<std::mutex> migrate_lock(migrate_zone_mtx_,std::try_to_lock);
++  if (!migrate_lock.owns_lock() || migrating_) { out.reason="迁移管理忙，尾部未知"; return out; }
++  std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,std::try_to_lock);
++  if (!reserve_lock.owns_lock()) { out.reason="预留管理忙，尾部未知"; return out; }
++  Zone* zone=migration_reserve_zone_;
++  out.known=true; out.present=zone!=nullptr;
++  if (zone==nullptr) { out.reason="当前没有专用预留，不推断无其他目标"; return out; }
++  const auto before=zone->GetResetState();
++  out.zone=zone->start_; out.remaining=zone->capacity_; out.wp=zone->wp_;
++  out.valid=zone->used_capacity_.load();
++  const auto after=zone->GetResetState();
++  out.host_generation=after.generation; out.host_sequence=after.sequence;
++  out.known=before.stable && after.stable && before.known && after.known &&
++      before.generation==after.generation && before.sequence==after.sequence;
++  out.reason=out.known ? "当前专用预留快照，不代表最终迁移目标" : "预留Reset观察变化";
++  return out;
++}
++
+ void ZonedBlockDevice::LogZoneReset(const ZoneResetState& state,
+                                     uint64_t previous_generation,
+                                     uint64_t old_wp, const IOStatus& status,
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+index 8170e8009..3635ec73a 100644
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -27,6 +27,7 @@
+ 
+ #include "metrics.h"
+ #include "rrzc_recent_log.h"
++#include "rrzc_cost_observe.h"
+ #include "rocksdb/env.h"
+ #include "rocksdb/file_system.h"
+ #include "rocksdb/io_status.h"
+@@ -247,6 +248,9 @@ class ZonedBlockDevice {
+   uint32_t GetNrZones();
+   IOStatus GetZoneReadPressure(ZoneReadPressureReport *report);
+   IOStatus GetZoneRecentReads(rrzc_v1::RecentReport *report);
++  std::vector<rrzc_cost::ValidityPoint> GetCostValidityReadings(
++      const rrzc_v1::RecentReport& report, uint64_t time_ns) const;
++  rrzc_cost::ReserveObservation GetMigrationReserveObservation();
+   bool IsAllocationDiagnosticsEnabled() const {
+     return allocation_diag_enabled_;
+   }
+diff --git a/fs/rrzc_cost_observe.h b/fs/rrzc_cost_observe.h
+new file mode 100644
+index 000000000..3988f887e
+--- /dev/null
++++ b/fs/rrzc_cost_observe.h
+@@ -0,0 +1,94 @@
++// 成本观察仅记录过去变化和当前尾部，不提供评分、改选或未来寿命预测。
++#pragma once
++#include "rrzc_recent_log.h"
++#include <algorithm>
++#include <cstring>
++#include <deque>
++#include <set>
++
++namespace rrzc_cost {
++using rrzc_v1::kSecond;
++struct ValidityPoint {
++  uint64_t zone=0, time_ns=0, valid=0, device_generation=0;
++  uint64_t host_generation=0, host_sequence=0;
++  bool known=false;
++};
++struct ValidityFrame {
++  uint64_t session_hi=0, session_lo=0;
++  std::vector<ValidityPoint> zones;
++};
++struct Change {
++  bool known=false, has_previous=false;
++  ValidityPoint previous;
++  uint64_t interval_ns=0, decreased=0, increased=0;
++  const char* reason="缺少历史采样";
++};
++inline bool Enabled(const char* value, bool short_shadow) {
++  return short_shadow && value && std::strcmp(value,"1")==0;
++}
++inline bool SameEpoch(const ValidityPoint& a,const ValidityPoint& b) {
++  return a.zone==b.zone && a.device_generation==b.device_generation &&
++      a.host_generation==b.host_generation && a.host_sequence==b.host_sequence;
++}
++class ValidityHistory {
++ public:
++  void Clear() { frames_.clear(); }
++  bool Push(ValidityFrame frame) {
++    if (!(frame.session_hi || frame.session_lo) || frame.zones.empty()) { Clear(); return false; }
++    std::set<uint64_t> seen;
++    for (const auto& p:frame.zones)
++      if (!seen.emplace(p.zone).second || !p.time_ns) { Clear(); return false; }
++    if (!frames_.empty() && (frames_.back().session_hi!=frame.session_hi ||
++        frames_.back().session_lo!=frame.session_lo)) Clear();
++    if (!frames_.empty() && frames_.back().zones.front().time_ns>=frame.zones.front().time_ns) {
++      Clear(); return false;
++    }
++    frames_.push_back(std::move(frame));
++    if (frames_.size()>40) frames_.pop_front();
++    return true;
++  }
++  Change Check(const ValidityFrame& current,const ValidityPoint& point,uint64_t window_ns) const {
++    Change out;
++    if (!point.known || (window_ns!=10*kSecond && window_ns!=30*kSecond) ||
++        point.time_ns<window_ns) { out.reason="当前有效量或窗口未知"; return out; }
++    const uint64_t target=point.time_ns-window_ns;
++    for (auto f=frames_.rbegin();f!=frames_.rend();++f) {
++      if (f->session_hi!=current.session_hi || f->session_lo!=current.session_lo) {
++        out.reason="设备会话变化"; return out;
++      }
++      const auto p=std::find_if(f->zones.begin(),f->zones.end(),
++          [&](const ValidityPoint& x){return x.zone==point.zone;});
++      if (p==f->zones.end() || !p->known || !SameEpoch(*p,point)) {
++        out.reason="历史区缺失或Reset观察变化"; return out;
++      }
++      if (p->time_ns>=point.time_ns) { out.reason="采样时间不递增"; return out; }
++      if (p->time_ns>target) continue;
++      out.has_previous=true; out.previous=*p;
++      out.interval_ns=point.time_ns-p->time_ns;
++      if (target-p->time_ns>2*kSecond) { out.reason="窗口端点采样过旧"; return out; }
++      out.known=true;
++      out.decreased=p->valid>point.valid ? p->valid-point.valid : 0;
++      out.increased=point.valid>p->valid ? point.valid-p->valid : 0;
++      out.reason="同区同代际有效量端点差，不区分删除与迁移";
++      return out;
++    }
++    return out;
++  }
++ private:
++  std::deque<ValidityFrame> frames_;
++};
++struct ReserveObservation {
++  bool enabled=false, known=false, present=false;
++  uint64_t zone=0, remaining=0, valid=0, wp=0;
++  uint64_t host_generation=0, host_sequence=0;
++  const char* reason="预留观察未启用";
++};
++struct PhysicalBounds { bool known=false; uint64_t lower=0,upper=0; };
++inline PhysicalBounds BoundPhysical(uint64_t logical,uint64_t block_size,uint64_t sparse_header) {
++  if (!logical || !block_size) return {};
++  const __uint128_t low=(__uint128_t(logical)+block_size-1)/block_size*block_size;
++  const __uint128_t high=(__uint128_t(logical)+sparse_header+block_size-1)/block_size*block_size;
++  if (high>UINT32_MAX) return {};
++  return {true,uint64_t(low),uint64_t(high)};
++}
++}  // 命名空间结束。
