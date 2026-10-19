@@ -1,0 +1,176 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -417,6 +417,10 @@
+       reserve_target_enabled);
+   const bool exact_live_enabled=rrzc_exact::Enabled(
+       getenv("ZENFS_RRZC_EXACT_LIVE"),single_recovery_enabled);
++  const bool space_emergency_enabled=rrzc_space::Enabled(
++      getenv("ZENFS_RRZC_SPACE_EMERGENCY"),single_recovery_enabled);
++  if (space_emergency_enabled)
++    Info(logger_,"空间紧急回收配置：启用=1，仅已触发GC且真实分配等待且正常安全候选不可用，临时放宽无效比例门槛，单区Greedy，不执行RR感知改选");
+   if (exact_live_enabled)
+     Info(logger_,"真实有效字节判空配置：启用=1，原无效比例门槛不变，实际有效字节大于零不因百分比舍入而判空");
+   if (single_recovery_enabled)
+@@ -650,6 +654,8 @@
+     // 真实选区记录与本轮现有迁移结果关联；不把选中等同于迁移或Reset成功。
+     bool v1_selected=false, v1_switched=false;
+     bool recovery_selected=false;
++    bool space_selected=false;
++    uint64_t space_zone=0;
+     uint64_t recovery_zone=0;
+     uint64_t v1_actual_zone=0, v1_extra_valid=0;
+     uint64_t full_zones = 0, max_garbage_percent = 0;
+@@ -699,6 +705,11 @@
+ 
+     if (simple_enabled) {
+       const size_t original_count = migrate_zones_start.size();
++      const uint64_t space_waiters=space_emergency_enabled ? zbd_->GetAllocationWaiters() : 0;
++      auto selection_pool=migrate_zones_start;
++      if (space_waiters) for (const auto& zone:snapshot.zones_)
++        if (zone.capacity==0 && zone.used_capacity>0 && zone.used_capacity<zone.max_capacity)
++          selection_pool.emplace(zone.start);
+       uint64_t largest_empty = 0;
+       for (const auto& zone : snapshot.zones_)
+         if (zone.wp == zone.start && zone.used_capacity == 0)
+@@ -706,7 +717,7 @@
+       std::map<uint64_t,rrzc_guard::Bounds> reserve_bounds;
+       if (reserve_target_enabled) {
+         for (const auto& file:snapshot.zone_files_) for (const auto& ext:file.extents) {
+-          if (!migrate_zones_start.count(ext.zone_start)) continue;
++          if (!selection_pool.count(ext.zone_start)) continue;
+           auto source=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
+               [&](const ZoneSnapshot& z){return z.start==ext.zone_start;});
+           if (source!=snapshot.zones_.end())
+@@ -738,17 +749,20 @@
+       const uint64_t reserve_capacity=reserve_snapshot==snapshot.zones_.end() ?
+           0 : reserve_snapshot->max_capacity;
+       std::vector<rrzc_simple::Candidate> candidates;
++      std::vector<rrzc_simple::Candidate> space_candidates;
+       for (const auto& zone : snapshot.zones_) {
+-        if (!migrate_zones_start.count(zone.start)) continue;
++        if (!selection_pool.count(zone.start)) continue;
+         rrzc_simple::Candidate c;
+         c.zone = zone.start; c.valid = zone.used_capacity; c.capacity = zone.max_capacity;
+         c.covered = diagnostic_covered[zone.start] == c.valid &&
+                     !diagnostic_non_sst.count(zone.start);
+         c.target_available = largest_empty >= c.valid;
++        bool space_reserve_ok=false;
+         if (reserve_target_enabled) {
+           const auto& b=reserve_bounds[c.zone];
+           const bool reserve_ok=rrzc_target::Fits(c.zone,c.valid,c.covered,b,
+               reserve_capacity,reserve_before,reserve_after);
++          space_reserve_ok=reserve_ok;
+           const bool empty_ok=single_recovery_enabled ?
+               b.Complete(c.valid) && largest_empty>=b.upper : c.target_available;
+           c.target_available=empty_ok || reserve_ok;
+@@ -767,6 +781,17 @@
+           c.maximum_reads = p->second.max_block_reads;
+           c.threshold = pressure.read_threshold;
+         }
++        if (space_waiters) {
++          const bool stable=live && diagnostic_before.count(c.zone) && diagnostic_after.count(c.zone) &&
++              live->wp_==zone.wp && live->used_capacity_==c.valid &&
++              IsMaintenanceWindowStable(diagnostic_before.at(c.zone),diagnostic_after.at(c.zone),live->GetResetState());
++          auto safe=c;safe.covered=c.covered && stable;safe.target_available=space_reserve_ok;
++          space_candidates.push_back(safe);
++          Info(logger_,"空间紧急候选：Zone=%lu，有效字节=%lu，容量字节=%lu，覆盖资格=%d，预留资格=%d，源稳定=%d，原门槛资格=%d",
++               c.zone,c.valid,c.capacity,safe.covered,safe.target_available,stable,
++               migrate_zones_start.count(c.zone)!=0);
++        }
++        if (!migrate_zones_start.count(c.zone)) continue;
+         candidates.push_back(c);
+         const uint64_t space = c.capacity && c.valid <= c.capacity ?
+             rrzc_simple::Ratio(c.capacity-c.valid, c.capacity) : 0;
+@@ -786,10 +811,21 @@
+           recovery_round=true; decision=fallback.decision;
+           recovery_selected=decision.found;
+           recovery_zone=decision.found ? decision.selected.zone : 0;
+-          Info(logger_,"公共单区恢复决策：存在=%d，实际Zone=%lu，实际有效字节=%lu，原回收预算字节=%lu，应急回收预算字节=1，RR感知改选=0",
+-               decision.found,recovery_zone,decision.found ? decision.selected.valid : 0,simple_budget);
+         }
+       }
++      if (space_waiters && !decision.found) {
++        const uint64_t current_waiters=zbd_->GetAllocationWaiters();
++        const auto emergency=rrzc_space::Choose(space_candidates,space_emergency_enabled,current_waiters,false);
++        if (emergency.found) {
++          decision=emergency;space_selected=true;space_zone=decision.selected.zone;
++          recovery_selected=false;recovery_round=true;
++          Info(logger_,"空间紧急回收决策：等待数=%lu，正常安全候选存在=0，实际Zone=%lu，实际有效字节=%lu，原无效比例门槛=%lu，回收预算字节=1，RR感知改选=0，专用预留限定=1",
++               current_waiters,space_zone,decision.selected.valid,threshold);
++        }
++      }
++      if (recovery_round && !space_selected)
++        Info(logger_,"公共单区恢复决策：存在=%d，实际Zone=%lu，实际有效字节=%lu，原回收预算字节=%lu，应急回收预算字节=1，RR感知改选=0",
++             decision.found,recovery_zone,decision.found ? decision.selected.valid : 0,simple_budget);
+       if (shadow_enabled && !recovery_round) {
+         ++shadow_round;
+         rrzc_v1::PairFrames pair_frozen;
+@@ -1181,6 +1217,9 @@
+       MigrationStats stats;
+       ++zc_rounds_;
+       s = MigrateExtents(migrate_exts, &stats);
++      if (space_selected)
++        Info(logger_,"空间紧急回收结果：实际Zone=%lu，本轮迁移字节=%lu，本轮重置区数=%lu，迁移成功=%d，等待数=%lu，状态=%s",
++             space_zone,stats.migrated_bytes,stats.reset_zones,s.ok(),zbd_->GetAllocationWaiters(),s.ToString().c_str());
+       if (recovery_selected)
+         Info(logger_,"公共单区恢复维护结果：实际Zone=%lu，本轮迁移字节=%lu，本轮重置区数=%lu，迁移成功=%d，状态=%s",
+              recovery_zone,stats.migrated_bytes,stats.reset_zones,s.ok(),s.ToString().c_str());
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -1044,6 +1044,7 @@
+   ZenFSMetricsLatencyGuard guard(metrics_, tag, Env::Default());
+   metrics_->ReportQPS(ZENFS_IO_ALLOC_QPS, 1);
+   std::unique_ptr<rrzc_fifo::Queue::Turn> allocation_turn;
++  std::unique_ptr<rrzc_space::Pressure::Wait> space_wait;
+   const char* queue_mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
+   if (io_type!=IOType::kWAL && rrzc_recovery::Enabled(
+           getenv("ZENFS_RRZC_SINGLE_RECOVERY"),queue_mode && !strcmp(queue_mode,"valid"),
+@@ -1140,6 +1141,11 @@
+           const bool recovery=rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
+               mode && !strcmp(mode,"valid"),migration_reserve_enabled_);
+           const unsigned attempts=recovery ? rrzc_alloc::kWaitAttempts : rrzc_recovery::WaitAttempts(false);
++          if (rrzc_space::Enabled(getenv("ZENFS_RRZC_SPACE_EMERGENCY"),recovery)) {
++            space_wait=std::make_unique<rrzc_space::Pressure::Wait>(allocation_pressure_);
++            Info(logger_,"空间紧急分配等待：等待数=%lu，仅资源耗尽后的有限重试，作用域退出自动撤销",
++                 allocation_pressure_.Count());
++          }
+           if (recovery)
+             Info(logger_,"公共分配恢复等待：上限秒=60，重试上限=%u，不持额外活跃令牌，不放宽寿命匹配，超时仍报错",attempts);
+           for (unsigned int attempt = 0; attempt < attempts; ++attempt) {
+@@ -1222,6 +1228,9 @@
+ 
+   if (allocated_zone) {
+     assert(allocated_zone->IsBusy());
++    if (space_wait)
++      Info(logger_,"空间紧急分配恢复：Zone=%lu，文件寿命=%d，IO类型=%d，成功=1，等待登记即将撤销",
++           allocated_zone->start_,static_cast<int>(file_lifetime),static_cast<int>(io_type));
+     Debug(logger_,
+           "Allocating zone(new=%d) start: 0x%lx wp: 0x%lx lt: %d file lt: %d\n",
+           new_zone, allocated_zone->start_, allocated_zone->wp_,
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -29,6 +29,7 @@
+ #include "rrzc_recent_log.h"
+ #include "rrzc_cost_observe.h"
+ #include "rrzc_allocation_queue.h"
++#include "rrzc_space_emergency.h"
+ #include "rocksdb/env.h"
+ #include "rocksdb/file_system.h"
+ #include "rocksdb/io_status.h"
+@@ -202,6 +203,7 @@
+   std::mutex migrate_zone_mtx_;
+   std::atomic<bool> migrating_{false};
+   rrzc_fifo::Queue allocation_queue_;
++  rrzc_space::Pressure allocation_pressure_;
+ 
+   unsigned int max_nr_active_io_zones_;
+   unsigned int max_nr_open_io_zones_;
+@@ -235,6 +237,7 @@
+   IOStatus AllocateMetaZone(Zone **out_meta_zone);
+ 
+   uint64_t GetFreeSpace();
++  uint64_t GetAllocationWaiters() const { return allocation_pressure_.Count(); }
+   uint64_t GetUsedSpace();
+   uint64_t GetReclaimableSpace();
+ 
+

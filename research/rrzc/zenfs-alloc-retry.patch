@@ -1,0 +1,97 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -33,6 +33,7 @@
+ #include "rrzc_single_recovery.h"
+ #include "rrzc_reserve_exchange.h"
+ #include "rrzc_empty_reserve.h"
++#include "rrzc_alloc_retry.h"
+ #include "zbdlib_zenfs.h"
+ #include "zonefs_zenfs.h"
+ 
+@@ -319,6 +320,11 @@
+   start_time_ = time(NULL);
+ 
+   if (migration_reserve_enabled_ && !readonly) {
++    const char* recovery_mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++    if (rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
++            recovery_mode && !strcmp(recovery_mode,"valid"),migration_reserve_enabled_))
++      Info(logger_,"公共分配恢复配置：预留余量下限字节=%lu，完整资源重试=1，有限等待秒=60，不放宽普通寿命匹配",
++           rrzc_alloc::Headroom(GetZoneSize()));
+     std::lock_guard<std::mutex> lock(migration_reserve_mtx_);
+     // 重新挂载时原专用部分区也被计入普通活跃数；超额时接管一个，避免双重计数。
+     if (active_io_zones_.load() > max_nr_active_io_zones_) {
+@@ -536,7 +542,8 @@
+         if (!full) PutActiveIOZoneToken();
+         Zone* old=migration_reserve_zone_;
+         const auto rotation=rrzc_empty::Plan(migrating_.load(),old!=nullptr,
+-            old && old->IsEmpty(),old && old->IsFull());
++            old && (old->IsEmpty() || rrzc_alloc::Enough(old->capacity_,old->max_capacity_)),
++            old && old->IsFull());
+         bool retained=false;
+         if (empty_reserve && rotation.rotate) {
+           const uint64_t old_start=old ? old->start_ : 0;
+@@ -693,7 +700,13 @@
+     return IOStatus::OK();
+   }
+ 
++  const uint64_t sacrifice=finish_victim->capacity_,finished_zone=finish_victim->start_;
+   s = finish_victim->Finish();
++  const char* recovery_mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++  if (rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
++          recovery_mode && !strcmp(recovery_mode,"valid"),migration_reserve_enabled_))
++    Info(logger_,"公共普通分配Finish代价：Zone=%lu，牺牲尾部字节=%lu，成功=%d，结果=%s",
++         finished_zone,s.ok() ? sacrifice : 0,s.ok(),s.ToString().c_str());
+   IOStatus release_status = finish_victim->CheckRelease();
+ 
+   if (s.ok()) {
+@@ -1117,11 +1130,34 @@
+           const char* mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
+           const bool recovery=rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
+               mode && !strcmp(mode,"valid"),migration_reserve_enabled_);
+-          const unsigned attempts=rrzc_recovery::WaitAttempts(recovery);
++          const unsigned attempts=recovery ? rrzc_alloc::kWaitAttempts : rrzc_recovery::WaitAttempts(false);
+           if (recovery)
+-            Info(logger_,"公共分配恢复等待：上限秒=30，重试上限=%u，不持额外活跃令牌，不放宽寿命匹配，超时仍报错",attempts);
++            Info(logger_,"公共分配恢复等待：上限秒=60，重试上限=%u，不持额外活跃令牌，不放宽寿命匹配，超时仍报错",attempts);
+           for (unsigned int attempt = 0; attempt < attempts; ++attempt) {
+-            if (GetActiveIOZoneTokenIfAvailable()) {
++            if (recovery) {
++              // 先取得真实空目标，再完整重试原活跃令牌/Finish流程，避免
++              // 上次释放的令牌或空区被其他线程拿走后只做不完整的重试。
++              s=AllocateEmptyZone(&allocated_zone);
++              if (!s.ok()) { PutOpenIOZoneToken(); return s; }
++              if (allocated_zone) {
++                bool active=false;
++                s=rrzc_alloc::ActivateClaimedEmpty<IOStatus>(
++                    [&]{return GetActiveIOZoneTokenIfAvailable();},
++                    [&]{return FinishCheapestIOZone();},&active);
++                if (!s.ok() || !active) {
++                  const auto release=allocated_zone->CheckRelease();
++                  allocated_zone=nullptr;
++                  if (!s.ok() || !release.ok()) {
++                    PutOpenIOZoneToken();return !s.ok() ? s : release;
++                  }
++                } else {
++                  allocated_zone->lifetime_=file_lifetime;new_zone=true;
++                  Info(logger_,"公共完整分配重试成功：重试=%u，空Zone=%lu，已持活跃令牌=1",
++                       attempt+1,allocated_zone->start_);
++                  break;
++                }
++              }
++            } else if (GetActiveIOZoneTokenIfAvailable()) {
+               s = AllocateEmptyZone(&allocated_zone);
+               if (!s.ok() || allocated_zone == nullptr) {
+                 PutActiveIOZoneToken();
+@@ -1162,6 +1198,12 @@
+                    allocated_zone->start_, allocated_zone->capacity_);
+               break;
+             }
++            if (recovery) {
++              // 没有空区且部分区均不能匹配时，关闭最便宜的可关闭部分区，
++              // 使闲置尾部成为原空间门槛可见的垃圾；不写入寿命不匹配区。
++              s=FinishCheapestIOZone();
++              if (!s.ok()) { PutOpenIOZoneToken(); return s; }
++            }
+             if (attempt + 1 < attempts) usleep(50 * 1000);
+           }
+         }

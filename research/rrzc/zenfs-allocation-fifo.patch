@@ -1,0 +1,36 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -1043,6 +1043,15 @@
+ 
+   ZenFSMetricsLatencyGuard guard(metrics_, tag, Env::Default());
+   metrics_->ReportQPS(ZENFS_IO_ALLOC_QPS, 1);
++  std::unique_ptr<rrzc_fifo::Queue::Turn> allocation_turn;
++  const char* queue_mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++  if (io_type!=IOType::kWAL && rrzc_recovery::Enabled(
++          getenv("ZENFS_RRZC_SINGLE_RECOVERY"),queue_mode && !strcmp(queue_mode,"valid"),
++          migration_reserve_enabled_)) {
++    allocation_turn=std::make_unique<rrzc_fifo::Queue::Turn>(allocation_queue_);
++    Info(logger_,"公共分配FIFO取得：序号=%lu，文件寿命=%d，IO类型=%d，仅普通分配排队，GC不排队",
++         allocation_turn->Number(),static_cast<int>(file_lifetime),static_cast<int>(io_type));
++  }
+ 
+   // Check if a deferred IO error was set
+   s = GetZoneDeferredStatus();
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -28,6 +28,7 @@
+ #include "metrics.h"
+ #include "rrzc_recent_log.h"
+ #include "rrzc_cost_observe.h"
++#include "rrzc_allocation_queue.h"
+ #include "rocksdb/env.h"
+ #include "rocksdb/file_system.h"
+ #include "rocksdb/io_status.h"
+@@ -200,6 +201,7 @@
+   std::condition_variable migrate_resource_;
+   std::mutex migrate_zone_mtx_;
+   std::atomic<bool> migrating_{false};
++  rrzc_fifo::Queue allocation_queue_;
+ 
+   unsigned int max_nr_active_io_zones_;
+   unsigned int max_nr_open_io_zones_;
