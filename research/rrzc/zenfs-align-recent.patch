@@ -1,0 +1,79 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -484,6 +484,8 @@
+   const bool cost_enabled=rrzc_cost::Enabled(getenv("ZENFS_RRZC_COST_OBSERVE"),short_enabled);
+   rrzc_cost::ValidityHistory cost_history;
+   rrzc_v1::GrowthHistory growth_history;
++  const char* aligned_value=getenv("ZENFS_RRZC_ALIGN_RECENT");
++  const bool aligned_recent=growth_enabled && aligned_value && !strcmp(aligned_value,"1");
+   const bool independent_sampling=rrzc_v1::IndependentSamplingEnabled(
+       getenv("ZENFS_RRZC_RECENT_SAMPLER"),guarded.observe,cost_enabled);
+   const bool pair_rate=rrzc_v1::PairRateEnabled(getenv("ZENFS_RRZC_PAIR_RATE_SHADOW"),
+@@ -539,7 +541,9 @@
+     Error(logger_,"V1真实：入口关闭，要求有效量单区Greedy，禁止混用影子、加权或人工选区");
+   if (real_enabled)
+     Info(logger_,"V1真实：已启用，沿用十秒界限及原近期预测，额外有效搬运预算字节=%lu，仅在原合格候选内改选",shadow_extra_budget);
+-  if (growth_enabled)
++  if (aligned_recent)
++    Info(logger_,"近期采样对齐：启用=1，V1增长准入：已启用，使用最近合法半秒至两秒前点，不跳过中间身份变化或计数回退，不跳过合法零增长点，RR阈值及预算不变");
++  else if (growth_enabled)
+     Info(logger_,"V1增长准入：已启用，等待期间约每秒只读采样，只用最新点，同块间隔半秒至两秒，沿用十秒界限及原预算，不替换原预测");
+   if (rrzc_v1::ShortShadowRequested(short_request) && !short_enabled)
+     Error(logger_,"短期影子：入口关闭，要求有效量Greedy、原影子和增长采样，禁止混用真实入口");
+@@ -932,7 +936,7 @@
+             if (independent_sampling) recent_sampler.Clear();
+           }
+           const auto growth=rrzc_v1::EvaluateWithGrowth(candidates,usable,recent,
+-              growth_history,simple_budget,shadow_horizon,shadow_extra_budget);
++              growth_history,simple_budget,shadow_horizon,shadow_extra_budget,aligned_recent);
+           for (const auto& c:candidates) {
+             const auto& g=growth.evidence.at(c.zone);
+             const auto& p=g.previous;
+--- a/fs/rrzc_v1_growth.h
++++ b/fs/rrzc_v1_growth.h
+@@ -31,11 +31,12 @@
+     if (frames_.size()>4) frames_.pop_front();
+   }
+   GrowthEvidence Check(const RecentReport& current, const RecentBlock& b,
+-                       uint64_t horizon_ns) const {
++                       uint64_t horizon_ns, bool aligned=false) const {
+     GrowthEvidence out;
+     if (!current.threshold || !horizon_ns || horizon_ns>300*kSecond ||
+         !(b.flags & kEnabled)) { out.reason="当前统计或参数无效"; return out; }
+-    // 最新点太近、换块或回退时保守拒绝，不向前寻找看起来合适的点。
++    // 默认仍按原最新点规则；新对齐入口只越过已验证同块且单调的过近点，
++    // 使用第一个满足固定时间窗口的点，不跳过换块、Reset或有效的零增长点。
+     uint64_t upper_time=b.snapshot_ns, upper_rc=b.rc;
+     for (auto frame=frames_.rbegin(); frame!=frames_.rend(); ++frame) {
+       auto p=std::find_if(frame->zones.begin(),frame->zones.end(),
+@@ -56,7 +57,11 @@
+       }
+       upper_time=p->snapshot_ns; upper_rc=p->rc;
+       out.interval_ns=b.snapshot_ns-p->snapshot_ns;
+-      if (out.interval_ns<kGrowthMinNs) { out.reason="最新采样过近"; return out; }
++      if (out.interval_ns<kGrowthMinNs) {
++        out.reason="最新采样过近";
++        if (aligned) continue;
++        return out;
++      }
+       if (out.interval_ns>kGrowthMaxNs) { out.reason="采样过旧"; return out; }
+       out.delta=b.rc-p->rc; out.known=true;
+       if (!out.delta) { out.reason="近期没有持续读取"; return out; }
+@@ -80,14 +85,14 @@
+     const std::vector<rrzc_simple::Candidate>& candidates,
+     const std::map<uint64_t,RecentBlock>& usable, const RecentReport& current,
+     const GrowthHistory& history, uint64_t reclaim_budget,
+-    uint64_t horizon_ns, uint64_t extra_budget) {
++    uint64_t horizon_ns, uint64_t extra_budget, bool aligned=false) {
+   GrowthDecision out;
+   out.original=Evaluate(candidates,usable,current.threshold,reclaim_budget,horizon_ns,extra_budget);
+   std::map<uint64_t,RecentBlock> admitted;
+   for (const auto& c:candidates) {
+     const auto p=usable.find(c.zone);
+     GrowthEvidence gate;
+-    if (p!=usable.end()) gate=history.Check(current,p->second,horizon_ns);
++    if (p!=usable.end()) gate=history.Check(current,p->second,horizon_ns,aligned);
+     else gate.reason="原统计准入未通过";
+     out.evidence.emplace(c.zone,gate);
+     // Greedy仍按原有效量选择；过滤的只是其他候选的改选许可。
+
