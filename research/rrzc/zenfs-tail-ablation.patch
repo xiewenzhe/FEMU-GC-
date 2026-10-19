@@ -1,0 +1,44 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -35,6 +35,7 @@
+ #include "rrzc_short_shadow.h"
+ #include "rrzc_cost_observe.h"
+ #include "rrzc_guarded_selector.h"
++#include "rrzc_tail_ablation.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -396,6 +397,8 @@
+       rrzc_v1::ShortShadowRequested(shadow_request) || rrzc_v1::ShortShadowRequested(real_request) ||
+       rrzc_v1::ShortShadowRequested(short_request) ||
+       rrzc_v1::ShortShadowRequested(getenv("ZENFS_RRZC_COST_OBSERVE")));
++  const auto tail_ablation=rrzc_tail_ablation::Resolve(
++      getenv("ZENFS_RRZC_TAIL_ABLATION"),guarded);
+   const auto v1_mode=rrzc_v1::ResolveMode(shadow_request,real_request,
+       simple_enabled && !simple_weighted,guarded.requested || test_choice_pending ||
+       (real_request && strcmp(real_request,"1")==0 && test_enable && strcmp(test_enable,"1")==0) ||
+@@ -436,6 +439,11 @@
+   if (guarded.observe)
+     Info(logger_,"独立尾部约束：已启用，真实执行=%d，同块短期界限秒=10，额外有效预算字节=%lu，未知回退Greedy，普通替代目标未知",
+          guarded.execute,shadow_extra_budget);
++  if (tail_ablation.requested && !tail_ablation.enabled)
++    Info(logger_,"尾部消融：拒绝启用，参数或入口不符，保持原行为");
++  if (tail_ablation.enabled)
++    Info(logger_,"尾部消融：已启用，护栏启用=%d，仅修改尾部准入，短期建议预算和稳定性复核不变",
++         !tail_ablation.bypass);
+ 
+   while (run_gc_worker_) {
+     if (!growth_enabled) {
+@@ -701,6 +709,12 @@
+             if (proposal.would_switch && proposal.greedy.found && chosen!=candidates.end())
+               tail=rrzc_guard::Evaluate(bounds.at(proposal.greedy.selected.zone),proposal.greedy.selected.valid,
+                   bounds.at(chosen->zone),chosen->valid,target,target_capacity);
++            const auto original_tail=tail;
++            tail=rrzc_tail_ablation::EffectiveTail(original_tail,tail_ablation,proposal.would_switch);
++            if (tail_ablation.enabled)
++              Info(logger_,"尾部消融核验：轮次=%lu，护栏启用=%d，原会改选=%d，原尾部允许=%d，原尾部分类=%s，生效尾部允许=%d，生效尾部分类=%s",
++                   shadow_round,!tail_ablation.bypass,proposal.would_switch,original_tail.allow,
++                   original_tail.category,tail.allow,tail.category);
+             const auto rechecked=zbd_->GetMigrationReserveObservation();
+             const bool target_stable=rrzc_guard::StableReserve(target,rechecked);
+             const auto execution=rrzc_guard::Apply(decision,proposal,candidates,

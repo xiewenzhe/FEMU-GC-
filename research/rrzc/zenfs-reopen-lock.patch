@@ -1,0 +1,24 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -1566,12 +1566,20 @@
+   std::string fname = FormatPathLexically(filename);
+   bool resetIOZones = false;
+   {
+-    std::lock_guard<std::mutex> file_lock(files_mtx_);
++    std::unique_lock<std::mutex> file_lock(files_mtx_);
+     std::shared_ptr<ZoneFile> zoneFile = GetFileNoLock(fname);
+ 
+     /* if reopen is true and the file exists, return it */
+     if (reopen && zoneFile != nullptr) {
++      // 迁移持文件开写锁后会取文件表锁，不能持表锁阻塞等待开写锁。
++      file_lock.unlock();
+       zoneFile->AcquireWRLock();
++      file_lock.lock();
++      // 等待期间允许其他线程删名或替换；不得把旧对象作为当前路径返回。
++      if (GetFileNoLock(fname).get() != zoneFile.get() || zoneFile->IsDeleted()) {
++        zoneFile->ReleaseWRLock();
++        return IOStatus::NotFound("等待重开期间文件已删除、改名或替换");
++      }
+       result->reset(
+           new ZonedWritableFile(zbd_, !file_opts.use_direct_writes, zoneFile));
+       return IOStatus::OK();
