@@ -1,0 +1,115 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -42,6 +42,7 @@
+ #include "rrzc_retention_selector.h"
+ #include "rrzc_reserve_target.h"
+ #include "rrzc_single_recovery.h"
++#include "rrzc_reserve_exchange.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -697,8 +698,6 @@
+       for (const auto& zone : snapshot.zones_)
+         if (zone.wp == zone.start && zone.used_capacity == 0)
+           largest_empty = std::max(largest_empty, zone.capacity);
+-      const auto reserve_before=reserve_target_enabled ?
+-          zbd_->GetMigrationReserveObservation() : rrzc_cost::ReserveObservation{};
+       std::map<uint64_t,rrzc_guard::Bounds> reserve_bounds;
+       if (reserve_target_enabled) {
+         for (const auto& file:snapshot.zone_files_) for (const auto& ext:file.extents) {
+@@ -710,6 +709,23 @@
+                 ZoneFile::SPARSE_HEADER_SIZE,source->max_capacity);
+         }
+       }
++      if (rrzc_exchange::Enabled(getenv("ZENFS_RRZC_RESERVE_EXCHANGE"),single_recovery_enabled)) {
++        uint64_t required=UINT64_MAX;
++        for (const auto& zone:snapshot.zones_) {
++          auto b=reserve_bounds.find(zone.start);
++          if (!migrate_zones_start.count(zone.start) || b==reserve_bounds.end() ||
++              diagnostic_non_sst.count(zone.start) || !b->second.Complete(zone.used_capacity) ||
++              diagnostic_covered[zone.start]!=zone.used_capacity) continue;
++          required=std::min(required,b->second.upper);
++        }
++        if (required!=UINT64_MAX && largest_empty<required) {
++          const auto exchanged=zbd_->ExchangeMigrationReserve(required);
++          if (!exchanged.ok()) { Error(logger_,"公共预留交换失败：%s",exchanged.ToString().c_str()); continue; }
++        }
++      }
++      // 归属准备完成之后才冻结两次观察，避免把旧预留与新预留拼接。
++      const auto reserve_before=reserve_target_enabled ?
++          zbd_->GetMigrationReserveObservation() : rrzc_cost::ReserveObservation{};
+       const auto reserve_after=reserve_target_enabled ?
+           zbd_->GetMigrationReserveObservation() : rrzc_cost::ReserveObservation{};
+       auto reserve_snapshot=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -31,6 +31,7 @@
+ #include "rocksdb/io_status.h"
+ #include "snapshot.h"
+ #include "rrzc_single_recovery.h"
++#include "rrzc_reserve_exchange.h"
+ #include "zbdlib_zenfs.h"
+ #include "zonefs_zenfs.h"
+ 
+@@ -1201,6 +1202,51 @@
+   return out;
+ }
+ 
++IOStatus ZonedBlockDevice::ExchangeMigrationReserve(uint64_t required) {
++  if (!migration_reserve_enabled_ || !required) return IOStatus::OK();
++  // 锁顺序与现有迁移分配相同；不等待在途迁移或占用中的普通部分区。
++  std::unique_lock<std::mutex> migrate_lock(migrate_zone_mtx_,std::try_to_lock);
++  if (!migrate_lock.owns_lock() || migrating_) return IOStatus::OK();
++  std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,std::try_to_lock);
++  if (!reserve_lock.owns_lock()) return IOStatus::OK();
++  Zone* old=migration_reserve_zone_;
++  if (!old || old->capacity_>=required || old->IsEmpty() || old->IsFull()) return IOStatus::OK();
++  const rrzc_exchange::State previous{old->start_,old->capacity_,old->max_capacity_,
++      old->used_capacity_.load(),old->wp_};
++  Zone* next=nullptr;
++  for (auto* zone:io_zones) {
++    if (zone==old || !zone->Acquire()) continue;
++    const rrzc_exchange::State current{zone->start_,zone->capacity_,zone->max_capacity_,
++        zone->used_capacity_.load(),zone->wp_};
++    if (rrzc_exchange::CanExchange(required,previous,current) &&
++        (!next || zone->capacity_>next->capacity_)) {
++      if (next) {
++        const auto release=next->CheckRelease();
++        if (!release.ok()) { zone->CheckRelease(); return release; }
++      }
++      next=zone;
++    } else {
++      const auto release=zone->CheckRelease();
++      if (!release.ok()) {
++        if (next) next->CheckRelease();
++        return release;
++      }
++    }
++  }
++  if (!next) return IOStatus::OK();
++  const auto closed=old->Close();
++  if (!closed.ok()) { next->CheckRelease(); return closed; }
++  // 两者均为非空且未满的活跃部分区。新预留原有的一个普通活跃令牌转给
++  // 旧预留，因此总令牌计数不增减；新预留保留Acquire，旧预留释放给普通池。
++  migration_reserve_zone_=next;
++  const auto released=old->CheckRelease();
++  if (!released.ok()) return released;
++  Info(logger_,"公共预留归属交换：需要字节=%lu，旧Zone=%lu，旧剩余字节=%lu，旧有效字节=%lu，新Zone=%lu，新剩余字节=%lu，新有效字节=%lu，不复制=1，不Finish=1，不Reset=1，普通活跃令牌转移=1",
++       required,previous.zone,previous.remaining,previous.valid,next->start_,
++       next->capacity_,next->used_capacity_.load());
++  return IOStatus::OK();
++}
++
+ rrzc_cost::ReserveObservation ZonedBlockDevice::GetMigrationReserveObservation() {
+   rrzc_cost::ReserveObservation out;
+   out.enabled=migration_reserve_enabled_;
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -251,6 +251,7 @@
+   std::vector<rrzc_cost::ValidityPoint> GetCostValidityReadings(
+       const rrzc_v1::RecentReport& report, uint64_t time_ns) const;
+   rrzc_cost::ReserveObservation GetMigrationReserveObservation();
++  IOStatus ExchangeMigrationReserve(uint64_t required);
+   bool IsAllocationDiagnosticsEnabled() const {
+     return allocation_diag_enabled_;
+   }

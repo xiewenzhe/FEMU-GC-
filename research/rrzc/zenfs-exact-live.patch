@@ -1,0 +1,32 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -43,6 +43,7 @@
+ #include "rrzc_reserve_target.h"
+ #include "rrzc_single_recovery.h"
+ #include "rrzc_reserve_exchange.h"
++#include "rrzc_exact_live.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -414,6 +415,10 @@
+   const bool single_recovery_enabled=rrzc_recovery::Enabled(
+       getenv("ZENFS_RRZC_SINGLE_RECOVERY"),simple_enabled && !simple_weighted,
+       reserve_target_enabled);
++  const bool exact_live_enabled=rrzc_exact::Enabled(
++      getenv("ZENFS_RRZC_EXACT_LIVE"),single_recovery_enabled);
++  if (exact_live_enabled)
++    Info(logger_,"真实有效字节判空配置：启用=1，原无效比例门槛不变，实际有效字节大于零不因百分比舍入而判空");
+   if (single_recovery_enabled)
+     Info(logger_,"公共单区恢复配置：启用=1，正常预算不变，预算不足只用原空间合格区的安全Greedy，不执行RR感知改选");
+   if (reserve_target_enabled)
+@@ -661,8 +666,8 @@
+       if (zone.capacity == 0) {
+         uint64_t garbage_percent_approx =
+             100 - 100 * zone.used_capacity / zone.max_capacity;
+-        bool selected = garbage_percent_approx > threshold &&
+-                        garbage_percent_approx < 100;
++        bool selected = rrzc_exact::Selected(zone.used_capacity,zone.max_capacity,
++            garbage_percent_approx,threshold,exact_live_enabled);
+         if (zbd_->IsAllocationDiagnosticsEnabled()) {
+           ++full_zones;
+           max_garbage_percent = std::max(max_garbage_percent, garbage_percent_approx);

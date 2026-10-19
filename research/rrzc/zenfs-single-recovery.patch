@@ -1,0 +1,139 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -41,6 +41,7 @@
+ #include "rrzc_pair_rate.h"
+ #include "rrzc_retention_selector.h"
+ #include "rrzc_reserve_target.h"
++#include "rrzc_single_recovery.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -409,6 +410,11 @@
+   const bool reserve_target_enabled=rrzc_target::Enabled(
+       getenv("ZENFS_RRZC_RESERVE_TARGET"),simple_enabled && !simple_weighted,
+       zbd_->IsMigrationReserveEnabled());
++  const bool single_recovery_enabled=rrzc_recovery::Enabled(
++      getenv("ZENFS_RRZC_SINGLE_RECOVERY"),simple_enabled && !simple_weighted,
++      reserve_target_enabled);
++  if (single_recovery_enabled)
++    Info(logger_,"公共单区恢复配置：启用=1，正常预算不变，预算不足只用原空间合格区的安全Greedy，不执行RR感知改选");
+   if (reserve_target_enabled)
+     Info(logger_,"预留目标资格配置：启用=1，物理总上界及同代际复核，不修改分配器");
+   if (simple_mode && !simple_enabled)
+@@ -637,6 +643,8 @@
+     std::set<uint64_t> migrate_zones_start;
+     // 真实选区记录与本轮现有迁移结果关联；不把选中等同于迁移或Reset成功。
+     bool v1_selected=false, v1_switched=false;
++    bool recovery_selected=false;
++    uint64_t recovery_zone=0;
+     uint64_t v1_actual_zone=0, v1_extra_valid=0;
+     uint64_t full_zones = 0, max_garbage_percent = 0;
+     uint64_t empty_zones = 0, partial_zones = 0, partial_capacity = 0;
+@@ -720,8 +728,9 @@
+           const auto& b=reserve_bounds[c.zone];
+           const bool reserve_ok=rrzc_target::Fits(c.zone,c.valid,c.covered,b,
+               reserve_capacity,reserve_before,reserve_after);
+-          const bool empty_ok=c.target_available;
+-          c.target_available=c.target_available || reserve_ok;
++          const bool empty_ok=single_recovery_enabled ?
++              b.Complete(c.valid) && largest_empty>=b.upper : c.target_available;
++          c.target_available=empty_ok || reserve_ok;
+           Info(logger_,"预留目标资格候选：Zone=%lu，空目标可用=%d，预留可用=%d，生效目标资格=%d，覆盖字节=%lu，片段数=%lu，物理上界字节=%lu，预留Zone=%lu，预留剩余字节=%lu，预留容量字节=%lu，复核稳定=%d",
+                c.zone,empty_ok,reserve_ok,c.target_available,b.covered,b.count,b.upper,
+                reserve_after.zone,reserve_after.remaining,reserve_capacity,
+@@ -749,7 +758,18 @@
+       }
+       auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
+                                                 simple_space_weight);
+-      if (shadow_enabled) {
++      bool recovery_round=false;
++      if (single_recovery_enabled && !decision.found) {
++        const auto fallback=rrzc_recovery::Choose(candidates,simple_budget);
++        if (fallback.needed) {
++          recovery_round=true; decision=fallback.decision;
++          recovery_selected=decision.found;
++          recovery_zone=decision.found ? decision.selected.zone : 0;
++          Info(logger_,"公共单区恢复决策：存在=%d，实际Zone=%lu，实际有效字节=%lu，原回收预算字节=%lu，应急回收预算字节=1，RR感知改选=0",
++               decision.found,recovery_zone,decision.found ? decision.selected.valid : 0,simple_budget);
++        }
++      }
++      if (shadow_enabled && !recovery_round) {
+         ++shadow_round;
+         rrzc_v1::PairFrames pair_frozen;
+         if (pair_rate) pair_frozen=pair_history.Freeze();
+@@ -1088,9 +1108,10 @@
+             [&](const rrzc_simple::Candidate& c) {
+               return c.valid <= c.capacity && c.capacity-c.valid >= simple_budget;
+             });
+-        if (budget_possible) migrate_zones_start.clear();
++        if (budget_possible || single_recovery_enabled) migrate_zones_start.clear();
+         Info(logger_, "简单双因素实际集合：模式=%s，原合格区=%zu，实际选中=%zu，状态=%s",
+              simple_mode, original_count, migrate_zones_start.size(),
++             single_recovery_enabled ? "公共单区等待，覆盖或目标未就绪" :
+              budget_possible ? "覆盖或目标未就绪" : "单区预算不可满足，退回原批量策略");
+       }
+     }
+@@ -1139,6 +1160,9 @@
+       MigrationStats stats;
+       ++zc_rounds_;
+       s = MigrateExtents(migrate_exts, &stats);
++      if (recovery_selected)
++        Info(logger_,"公共单区恢复维护结果：实际Zone=%lu，本轮迁移字节=%lu，本轮重置区数=%lu，迁移成功=%d，状态=%s",
++             recovery_zone,stats.migrated_bytes,stats.reset_zones,s.ok(),s.ToString().c_str());
+       if (real_enabled && v1_selected)
+         Info(logger_,"V1真实维护结果：轮次=%lu，实际Zone=%lu，实际改选=%d，选择时额外有效搬运字节=%lu，本轮迁移字节=%lu，本轮重置区数=%lu，迁移成功=%d，状态=%s",
+              shadow_round,v1_actual_zone,v1_switched,v1_extra_valid,
+@@ -2863,6 +2887,19 @@
+ 
+     // 文件可能在迁移期间被删除，此时不更新原文件的映射。
+     if (GetFile(fname).get() != zfile.get()) {
++      const char* mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++      const bool recovery=rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
++          mode && !strcmp(mode,"valid"),zbd_->IsMigrationReserveEnabled());
++      if (recovery && zfile->IsDeleted()) {
++        const auto released=zbd_->ReleaseMigrateZone(target_zone);
++        const bool discarded=rrzc_recovery::DiscardUncommitted(extents,&new_extent_list);
++        changed=false;
++        s=!released.ok() ? released : discarded ? IOStatus::OK() :
++            IOStatus::Corruption("已退役文件的迁移副本形状不符");
++        Info(logger_,"公共迁移退役处理：文件编号=%lu，文件名=%s，源Zone=%lu，已退役=1，未提交映射已撤销=%d，目标释放成功=%d，复制仍计入搬运字节，源引用仍由原文件对象维护",
++             zfile->GetID(),fname.c_str(),observed_source,discarded,released.ok());
++        break;
++      }
+       s = IOStatus::NotFound("迁移期间文件已被删除");
+       zbd_->ReleaseMigrateZone(target_zone);
+       break;
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -30,6 +30,7 @@
+ #include "rocksdb/env.h"
+ #include "rocksdb/io_status.h"
+ #include "snapshot.h"
++#include "rrzc_single_recovery.h"
+ #include "zbdlib_zenfs.h"
+ #include "zonefs_zenfs.h"
+ 
+@@ -1068,7 +1069,13 @@
+         if (allocation_fallback_enabled_ && io_type != IOType::kWAL) {
+           // 不持有 Zone 独占权或额外活跃令牌等待，让写入和 GC 能继续推进。
+           // 最多重试 200 次，间隔 50 毫秒；超时仍沿用原来的分配失败路径。
+-          for (unsigned int attempt = 0; attempt < 200; ++attempt) {
++          const char* mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++          const bool recovery=rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
++              mode && !strcmp(mode,"valid"),migration_reserve_enabled_);
++          const unsigned attempts=rrzc_recovery::WaitAttempts(recovery);
++          if (recovery)
++            Info(logger_,"公共分配恢复等待：上限秒=30，重试上限=%u，不持额外活跃令牌，不放宽寿命匹配，超时仍报错",attempts);
++          for (unsigned int attempt = 0; attempt < attempts; ++attempt) {
+             if (GetActiveIOZoneTokenIfAvailable()) {
+               s = AllocateEmptyZone(&allocated_zone);
+               if (!s.ok() || allocated_zone == nullptr) {
+@@ -1110,7 +1117,7 @@
+                    allocated_zone->start_, allocated_zone->capacity_);
+               break;
+             }
+-            if (attempt + 1 < 200) usleep(50 * 1000);
++            if (attempt + 1 < attempts) usleep(50 * 1000);
+           }
+         }
+       }

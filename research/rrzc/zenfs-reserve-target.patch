@@ -1,0 +1,67 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -40,6 +40,7 @@
+ #include "rrzc_recent_sampler.h"
+ #include "rrzc_pair_rate.h"
+ #include "rrzc_retention_selector.h"
++#include "rrzc_reserve_target.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -404,6 +405,12 @@
+   const char* used_label = simple_space_weight == 50 ?
+       "实际使用等权" : "实际使用加权";
+   const bool simple_weighted = simple_enabled && strcmp(simple_mode, "weighted") == 0;
++  // 仅新Greedy及其RR感知派生实验认可已有预留尾部，旧加权入口不变。
++  const bool reserve_target_enabled=rrzc_target::Enabled(
++      getenv("ZENFS_RRZC_RESERVE_TARGET"),simple_enabled && !simple_weighted,
++      zbd_->IsMigrationReserveEnabled());
++  if (reserve_target_enabled)
++    Info(logger_,"预留目标资格配置：启用=1，物理总上界及同代际复核，不修改分配器");
+   if (simple_mode && !simple_enabled)
+     Error(logger_, "简单双因素：配置非法，保持原批量策略");
+   if (simple_enabled)
+@@ -682,6 +689,25 @@
+       for (const auto& zone : snapshot.zones_)
+         if (zone.wp == zone.start && zone.used_capacity == 0)
+           largest_empty = std::max(largest_empty, zone.capacity);
++      const auto reserve_before=reserve_target_enabled ?
++          zbd_->GetMigrationReserveObservation() : rrzc_cost::ReserveObservation{};
++      std::map<uint64_t,rrzc_guard::Bounds> reserve_bounds;
++      if (reserve_target_enabled) {
++        for (const auto& file:snapshot.zone_files_) for (const auto& ext:file.extents) {
++          if (!migrate_zones_start.count(ext.zone_start)) continue;
++          auto source=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
++              [&](const ZoneSnapshot& z){return z.start==ext.zone_start;});
++          if (source!=snapshot.zones_.end())
++            reserve_bounds[ext.zone_start].Add(ext.length,zbd_->GetBlockSize(),
++                ZoneFile::SPARSE_HEADER_SIZE,source->max_capacity);
++        }
++      }
++      const auto reserve_after=reserve_target_enabled ?
++          zbd_->GetMigrationReserveObservation() : rrzc_cost::ReserveObservation{};
++      auto reserve_snapshot=std::find_if(snapshot.zones_.begin(),snapshot.zones_.end(),
++          [&](const ZoneSnapshot& z){return reserve_after.present && z.start==reserve_after.zone;});
++      const uint64_t reserve_capacity=reserve_snapshot==snapshot.zones_.end() ?
++          0 : reserve_snapshot->max_capacity;
+       std::vector<rrzc_simple::Candidate> candidates;
+       for (const auto& zone : snapshot.zones_) {
+         if (!migrate_zones_start.count(zone.start)) continue;
+@@ -690,6 +716,17 @@
+         c.covered = diagnostic_covered[zone.start] == c.valid &&
+                     !diagnostic_non_sst.count(zone.start);
+         c.target_available = largest_empty >= c.valid;
++        if (reserve_target_enabled) {
++          const auto& b=reserve_bounds[c.zone];
++          const bool reserve_ok=rrzc_target::Fits(c.zone,c.valid,c.covered,b,
++              reserve_capacity,reserve_before,reserve_after);
++          const bool empty_ok=c.target_available;
++          c.target_available=c.target_available || reserve_ok;
++          Info(logger_,"预留目标资格候选：Zone=%lu，空目标可用=%d，预留可用=%d，生效目标资格=%d，覆盖字节=%lu，片段数=%lu，物理上界字节=%lu，预留Zone=%lu，预留剩余字节=%lu，预留容量字节=%lu，复核稳定=%d",
++               c.zone,empty_ok,reserve_ok,c.target_available,b.covered,b.count,b.upper,
++               reserve_after.zone,reserve_after.remaining,reserve_capacity,
++               rrzc_guard::StableReserve(reserve_before,reserve_after));
++        }
+         auto p = pressure_by_zone.find(zone.start);
+         Zone* live = zbd_->GetIOZone(zone.start);
+         c.pressure_available = pressure_status.ok() && pressure.read_threshold > 0 &&

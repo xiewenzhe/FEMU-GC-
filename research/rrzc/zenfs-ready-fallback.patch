@@ -1,0 +1,15 @@
+--- a/fs/rrzc_single_recovery.h
++++ b/fs/rrzc_single_recovery.h
+@@ -9,9 +9,9 @@
+ }
+ struct Fallback { bool needed=false; rrzc_simple::Decision decision; };
+ inline Fallback Choose(const std::vector<rrzc_simple::Candidate>& candidates,uint64_t budget) {
+-  // 有候选满足正常空间预算时，不用应急入口绕过其覆盖或目标检查。
+-  for (const auto& c:candidates)
+-    if (c.valid<=c.capacity && c.capacity-c.valid>=budget) return {};
++  // 只有真实可迁移的正常候选才阻止应急；非SST或覆盖/目标未知区
++  // 不能仅因数值预算满足，就阻塞其他覆盖完整且有安全目标的区。
++  if (!budget || rrzc_simple::Choose(candidates,budget,false).found) return {};
+   // 候选已由调用者通过原ZenFS空间门槛；这里只放宽额外实验预算至正回收。
+   return {true,rrzc_simple::Choose(candidates,1,false)};
+ }

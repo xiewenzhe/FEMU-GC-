@@ -1,0 +1,74 @@
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -32,6 +32,7 @@
+ #include "snapshot.h"
+ #include "rrzc_single_recovery.h"
+ #include "rrzc_reserve_exchange.h"
++#include "rrzc_empty_reserve.h"
+ #include "zbdlib_zenfs.h"
+ #include "zonefs_zenfs.h"
+ 
+@@ -509,6 +510,13 @@
+ }
+ 
+ IOStatus ZonedBlockDevice::ResetUnusedIOZones() {
++  const char* mode=getenv("ZENFS_RRZC_SIMPLE_MODE");
++  const bool recovery=rrzc_recovery::Enabled(getenv("ZENFS_RRZC_SINGLE_RECOVERY"),
++      mode && !strcmp(mode,"valid"),migration_reserve_enabled_);
++  const bool empty_reserve=rrzc_empty::Enabled(getenv("ZENFS_RRZC_EMPTY_RESERVE"),recovery);
++  // 新入口统一采用迁移管理锁在前、预留锁在后的顺序；默认路径不加此锁。
++  std::unique_lock<std::mutex> migrate_lock(migrate_zone_mtx_,std::defer_lock);
++  if (empty_reserve) migrate_lock.lock();
+   // 与普通空区分配串行，回收出的第一个空区优先补充迁移预留。
+   std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,
+                                            std::defer_lock);
+@@ -518,10 +526,46 @@
+       if (!z->IsEmpty() && !z->IsUsed()) {
+         bool full = z->IsFull();
+         IOStatus reset_status = z->Reset();
+-        IOStatus release_status = z->CheckRelease();
+-        if (!reset_status.ok()) return reset_status;
+-        if (!release_status.ok()) return release_status;
++        if (!reset_status.ok()) { z->CheckRelease(); return reset_status; }
++        if (!empty_reserve) {
++          const auto released=z->CheckRelease();
++          if (!released.ok()) return released;
++          if (!full) PutActiveIOZoneToken();
++          continue;
++        }
+         if (!full) PutActiveIOZoneToken();
++        Zone* old=migration_reserve_zone_;
++        const auto rotation=rrzc_empty::Plan(migrating_.load(),old!=nullptr,
++            old && old->IsEmpty(),old && old->IsFull());
++        bool retained=false;
++        if (empty_reserve && rotation.rotate) {
++          const uint64_t old_start=old ? old->start_ : 0;
++          const uint64_t old_remaining=old ? old->capacity_ : 0;
++          const bool token=rotation.need_token && GetActiveIOZoneTokenIfAvailable();
++          // 旧部分区返回普通池需要一个活跃令牌；无令牌时沿用Finish语义，
++          // 但替补已是本次独占的真实空区，不再先丢尾部再等待替补。
++          if (old) {
++            const auto status=rotation.need_token && !token ? old->Finish() : old->Close();
++            if (!status.ok()) {
++              if (token) PutActiveIOZoneToken();
++              z->CheckRelease();return status;
++            }
++          }
++          migration_reserve_zone_=z;
++          retained=true;
++          if (old) {
++            const auto released=old->CheckRelease();
++            if (!released.ok()) return released;
++          }
++          const uint64_t sacrificed=rotation.need_token && !token ? old_remaining : 0;
++          Info(logger_,"公共完整空预留周转：新Zone=%lu，新剩余字节=%lu，旧存在=%d，旧Zone=%lu，旧剩余字节=%lu，保留旧尾部=%d，普通活跃令牌新增=%d，牺牲尾部字节=%lu，新区独占保留=1",
++               z->start_,z->capacity_,old!=nullptr,old_start,old_remaining,
++               old && !sacrificed,token,sacrificed);
++        }
++        if (!retained) {
++          const auto released=z->CheckRelease();
++          if (!released.ok()) return released;
++        }
+       } else {
+         IOStatus release_status = z->CheckRelease();
+         if (!release_status.ok()) return release_status;
