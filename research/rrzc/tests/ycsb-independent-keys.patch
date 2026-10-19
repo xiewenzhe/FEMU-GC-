@@ -1,0 +1,114 @@
+--- a/core/core_workload.h
++++ b/core/core_workload.h
+@@ -19,6 +19,7 @@
+ #include "acknowledged_counter_generator.h"
+ #include "utils/properties.h"
+ #include "utils/utils.h"
++#include "rrzc_independent_keys.h"
+ 
+ namespace ycsbc {
+ 
+@@ -233,6 +234,7 @@
+   size_t record_count_;
+   int zero_padding_;
+   std::string key_prefix_;
++  RRZCIndependentKeys independent_keys_;
+ };
+ 
+ } // ycsbc
+--- a/core/core_workload.cc
++++ b/core/core_workload.cc
+@@ -106,6 +106,7 @@
+ namespace ycsbc {
+ 
+ void CoreWorkload::Init(const utils::Properties &p) {
++  independent_keys_.Init(p);
+   table_name_ = p.GetProperty(TABLENAME_PROPERTY,TABLENAME_DEFAULT);
+ 
+   field_count_ = std::stoi(p.GetProperty(FIELD_COUNT_PROPERTY, FIELD_COUNT_DEFAULT));
+@@ -292,7 +293,7 @@
+ }
+ 
+ DB::Status CoreWorkload::TransactionRead(DB &db) {
+-  uint64_t key_num = NextTransactionKeyNum();
++  uint64_t key_num = independent_keys_.enabled() ? independent_keys_.Read() : NextTransactionKeyNum();
+   const std::string key = BuildKeyName(key_num);
+   std::vector<DB::Field> result;
+   if (!read_all_fields()) {
+@@ -341,7 +342,7 @@
+ }
+ 
+ DB::Status CoreWorkload::TransactionUpdate(DB &db) {
+-  uint64_t key_num = NextTransactionKeyNum();
++  uint64_t key_num = independent_keys_.enabled() ? independent_keys_.Update() : NextTransactionKeyNum();
+   const std::string key = BuildKeyName(key_num);
+   std::vector<DB::Field> values;
+   if (write_all_fields()) {
+--- /dev/null
++++ b/core/rrzc_independent_keys.h
+@@ -0,0 +1,65 @@
++#ifndef RRZC_YCSB_INDEPENDENT_KEYS_H
++#define RRZC_YCSB_INDEPENDENT_KEYS_H
++
++#include <charconv>
++#include <cmath>
++#include <memory>
++#include "scrambled_zipfian_generator.h"
++#include "uniform_generator.h"
++#include "utils/properties.h"
++
++namespace ycsbc {
++
++// 派生实验负载：热区使用上游Zipfian读生成器，全空间使用上游均匀更新生成器。
++// 关闭时不构造生成器、不消耗随机数，也不接管原有选键路径。
++class RRZCIndependentKeys {
++ public:
++  void Init(const utils::Properties &p) {
++    const auto flag = p.GetProperty("rrzc.independent_keys", "false");
++    if (flag != "true" && flag != "false")
++      throw utils::Exception("独立选键开关必须为true或false");
++    if (flag == "false") return;
++    const auto records = Number(p.GetProperty("recordcount"));
++    const auto hot = Number(p.GetProperty("rrzc.read_key_count"));
++    if (records < 2 || hot < 2 || hot > records ||
++        p.GetProperty("threadcount", "1") != "1" ||
++        p.GetProperty("insertstart", "0") != "0" ||
++        p.GetProperty("requestdistribution", "uniform") != "uniform" ||
++        p.ContainsKey("zipfian_const"))
++      throw utils::Exception("独立选键只支持单线程、零起始固定键空间和固定0.99读分布");
++    const double read = Proportion(p, "readproportion", "0.95");
++    const double update = Proportion(p, "updateproportion", "0.05");
++    if (read <= 0 || update <= 0 || std::abs(read + update - 1) > 1e-9 ||
++        Proportion(p, "insertproportion", "0") != 0 ||
++        Proportion(p, "scanproportion", "0") != 0 ||
++        Proportion(p, "readmodifywriteproportion", "0") != 0)
++      throw utils::Exception("独立选键只支持读和更新，比例之和必须为1");
++    read_.reset(new ScrambledZipfianGenerator(0, hot - 1));
++    update_.reset(new UniformGenerator(0, records - 1));
++  }
++
++  bool enabled() const { return read_ != nullptr; }
++  uint64_t Read() { return read_->Next(); }
++  uint64_t Update() { return update_->Next(); }
++
++ private:
++  static uint64_t Number(const std::string &text) {
++    uint64_t value = 0;
++    auto result = std::from_chars(text.data(), text.data() + text.size(), value);
++    if (text.empty() || result.ec != std::errc() || result.ptr != text.data() + text.size())
++      throw utils::Exception("独立选键的键数必须为无符号十进制整数");
++    return value;
++  }
++  static double Proportion(const utils::Properties &p, const char *key, const char *fallback) {
++    const auto text = p.GetProperty(key, fallback);
++    size_t end = 0;
++    const double value = std::stod(text, &end);
++    if (end != text.size() || !std::isfinite(value) || value < 0 || value > 1)
++      throw utils::Exception("独立选键的操作比例不合法");
++    return value;
++  }
++  std::unique_ptr<Generator<uint64_t>> read_;
++  std::unique_ptr<Generator<uint64_t>> update_;
++};
++}  // 命名空间ycsbc
++#endif
