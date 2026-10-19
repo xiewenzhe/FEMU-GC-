@@ -1,0 +1,113 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index ce470ea11..b3875e0dd 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -309,7 +309,9 @@ IOStatus ZenMetaLog::ReadRecord(Slice* record, std::string* scratch) {
+ 
+ ZenFS::ZenFS(ZonedBlockDevice* zbd, std::shared_ptr<FileSystem> aux_fs,
+              std::shared_ptr<Logger> logger)
+-    : FileSystemWrapper(aux_fs), zbd_(zbd), logger_(logger) {
++    : FileSystemWrapper(aux_fs), zbd_(zbd), logger_(logger),
++      migration_window_(rrzc_observe::MigrationWindowEnabled(
++          getenv("ZENFS_RRZC_MIGRATION_WINDOW"))) {
+   Info(logger_, "ZenFS initializing");
+   Info(logger_, "ZenFS parameters: block device: %s, aux filesystem: %s",
+        zbd_->GetFilename().c_str(), target()->Name());
+@@ -317,6 +319,8 @@ ZenFS::ZenFS(ZonedBlockDevice* zbd, std::shared_ptr<FileSystem> aux_fs,
+   Info(logger_, "ZenFS initializing");
+   next_file_id_ = 1;
+   metadata_writer_.zenFS = this;
++  Info(logger_,"迁移窗口统计：启用=%d，仅观测复制及映射提交，默认关闭，不参与RR／GC或选区",
++       migration_window_.Freeze().enabled);
+ }
+ 
+ ZenFS::~ZenFS() {
+@@ -538,6 +542,7 @@ void ZenFS::GCWorker() {
+ 
+     std::map<uint64_t, ZoneResetState> diagnostic_before;
+     if (zbd_->IsMaintenanceDiagnosticsEnabled() || simple_enabled) diagnostic_before = zbd_->GetZoneResetStates();
++    const auto migration_before=migration_window_.Freeze();
+     GetZenFSSnapshot(snapshot, options);
+ 
+     uint64_t threshold = (100 - GC_SLOPE * (GC_START_LEVEL - free_percent));
+@@ -665,11 +670,23 @@ void ZenFS::GCWorker() {
+         const uint64_t query_ns=std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now()-query_start).count();
+         const auto recent_after=zbd_->GetZoneResetStates();
++        const auto migration_after=migration_window_.Freeze();
+         std::map<uint64_t,rrzc_v1::RecentBlock> usable;
+         const bool frame_ok=recent_status.ok() && pressure_status.ok() &&
+             recent.threshold==pressure.read_threshold &&
+             recent.blocks_per_zone==pressure.blocks_per_zone && query_ns<=2*rrzc_v1::kSecond;
+         for (const auto& c:candidates) {
++          // 仅输出真实GC轮次当前可见的迁移状态，绝不据此更改本轮候选。
++          if (migration_window_.Enabled()) {
++            const rrzc_observe::MigrationWindow::Frame* frames[]={&migration_before,&migration_after};
++            for (unsigned side=0;side<2;++side) {
++              const auto& frame=*frames[side];const auto state=frame.Get(c.zone);
++              Info(logger_,"迁移窗口候选：轮次=%lu，Zone=%lu，侧=%s，启用=%d，可信=%d，实例=%lu，创建绝对纳秒=%lu，冻结绝对纳秒=%lu，序号=%lu，活动数=%lu，末次结束绝对纳秒=%lu，有效字节=%lu，原候选资格=%d",
++                   shadow_round,c.zone,side==0?"前":"后",frame.enabled,frame.reliable,
++                   frame.owner,frame.created_ns,frame.captured_ns,state.sequence,state.active,
++                   state.last_end_ns,c.valid,rrzc_simple::Eligible(c,simple_budget));
++            }
++          }
+           const auto b=std::find_if(recent.zones.begin(),recent.zones.end(),
+               [&](const rrzc_v1::RecentBlock& x){return x.zone==c.zone;});
+           const auto first=diagnostic_before.find(c.zone);
+@@ -2630,6 +2647,15 @@ IOStatus ZenFS::MigrateFileExtents(
+     return IOStatus::OK();
+   }
+ 
++  // 源覆盖片段准备至最终映射提交及文件解锁，包含失败和删除竞态。
++  // 目标在分配返回后、任何复制之前加入，所有标记到函数退出才结束。
++  std::vector<std::unique_ptr<rrzc_observe::MigrationWindow::Scope>> migration_scopes;
++  if (migration_window_.Enabled()) {
++    std::vector<uint64_t> migration_sources;
++    for (const auto* observed : migrate_exts) migration_sources.push_back(observed->zone_start);
++    migration_scopes.push_back(migration_window_.Mark(migration_sources));
++  }
++
+   std::vector<ZoneExtent*> new_extent_list;
+   std::vector<ZoneExtent*> extents = zfile->GetExtents();
+   bool changed = false;
+@@ -2679,6 +2705,8 @@ IOStatus ZenFS::MigrateFileExtents(
+       break;
+     }
+ 
++    if (migration_window_.Enabled())
++      migration_scopes.push_back(migration_window_.Mark({target_zone->start_}));
+     uint64_t target_start = target_zone->wp_;
+     const uint64_t observed_source=ext->zone_->start_;
+     const uint64_t observed_source_start=ext->start_;
+diff --git a/fs/fs_zenfs.h b/fs/fs_zenfs.h
+index f209d7f0b..965e4a68e 100644
+--- a/fs/fs_zenfs.h
++++ b/fs/fs_zenfs.h
+@@ -26,6 +26,7 @@ namespace fs = std::filesystem;
+ #include "snapshot.h"
+ #include "version.h"
+ #include "zbd_zenfs.h"
++#include "rrzc_migration_window.h"
+ 
+ namespace ROCKSDB_NAMESPACE {
+ 
+@@ -152,6 +153,8 @@ class ZenFS : public FileSystemWrapper {
+   bool rr_enabled_ = false;
+   // 仅控制新增诊断；跨删除线程访问必须使用原子值，不影响选区。
+   std::atomic<bool> v1_shadow_{false};
++  // 构造时固定是否启用；只读标记不依赖影子或真实选区模式。
++  rrzc_observe::MigrationWindow migration_window_;
+   uint64_t rr_completed_zones_ = 0;
+   uint64_t rr_attempts_ = 0;
+   uint64_t rr_migrated_bytes_ = 0;
+@@ -467,6 +470,10 @@ class ZenFS : public FileSystemWrapper {
+   void GetZenFSSnapshot(ZenFSSnapshot& snapshot,
+                         const ZenFSSnapshotOptions& options);
+ 
++  rrzc_observe::MigrationWindow::Frame GetMigrationWindowSnapshot() {
++    return migration_window_.Freeze();
++  }
++
+   IOStatus MigrateExtents(const std::vector<ZoneExtentSnapshot*>& extents,
+                           MigrationStats* stats);
+ 

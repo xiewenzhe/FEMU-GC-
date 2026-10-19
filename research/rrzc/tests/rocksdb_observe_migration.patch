@@ -1,0 +1,56 @@
+diff --git a/rocksdb_observe_test.cc b/rocksdb_observe_test.cc
+index b8a8e7afe..f5d12a375 100644
+--- a/rocksdb_observe_test.cc
++++ b/rocksdb_observe_test.cc
+@@ -104,15 +104,18 @@ static void verify(DB& db,unsigned keys,unsigned hot,uint64_t writes,const rrzc_
+ }
+ class Observer {
+   DB& db;ZenFS& fs;ZonedBlockDevice& device;std::shared_ptr<Trace> trace;
+-  std::ofstream zones,files,live;uint64_t serial=0;
++  std::ofstream zones,files,live,migration;uint64_t serial=0;
+  public:
+   Observer(DB& d,ZenFS& f,ZonedBlockDevice& z,std::shared_ptr<Trace> t,const std::string& out)
+     :db(d),fs(f),device(z),trace(std::move(t)),zones(out+"/zones.csv"),files(out+"/files.csv"),live(out+"/live.csv") {
+     zones<<"批次,阶段,查询开始纳秒,查询结束纳秒,Zone,有效字节,写指针,剩余字节,容量字节,会话高位,会话低位,设备代际前,设备代际后,主机代际前,主机代际后,主机序号前,主机序号后,统计稳定,块编号,RC,十秒增量,三十秒增量,窗口标志,设备快照纳秒,映射覆盖字节\n";
+     files<<"批次,阶段,Zone,文件编号,文件,片段起点,区内有效字节\n";
+     live<<"批次,查询开始纳秒,查询结束纳秒,文件,文件号,层级,字节,正在Compaction,最小序列,最大序列,创建墙钟秒\n";
++    migration.open(out+"/migration.csv");
++    migration<<"批次,Zone,侧,启用,可信,实例,创建绝对纳秒,冻结绝对纳秒,轨迹原点绝对纳秒,序号,活动数,末次结束绝对纳秒\n";
+   }
+   void sample() {
++    const auto migration_before=fs.GetMigrationWindowSnapshot();
+     uint64_t begin=trace->now();unsigned phase=trace->phase;
+     rrzc_v1::RecentReport a,b;check(device.GetZoneRecentReads(&a));
+     auto before=device.GetZoneResetStates();
+@@ -120,6 +123,7 @@ class Observer {
+     fs.GetZenFSSnapshot(snapshot,want);
+     std::vector<LiveFileMetaData> metadata;db.GetLiveFilesMetaData(&metadata);
+     check(device.GetZoneRecentReads(&b));auto after=device.GetZoneResetStates();uint64_t end=trace->now();
++    const auto migration_after=fs.GetMigrationWindowSnapshot();
+     require(a.threshold==4096&&b.threshold==4096&&a.zones.size()==32&&b.zones.size()==32,"观察设备几何或阈值不符");
+     std::map<uint64_t,uint64_t> covered;
+     for(const auto& f:snapshot.zone_files_) for(const auto& e:f.extents) {
+@@ -127,6 +131,13 @@ class Observer {
+       files<<serial<<','<<phase<<','<<e.zone_start<<','<<f.file_id<<','<<f.filename<<','<<e.start<<','<<e.length<<'\n';
+     }
+     for(const auto& z:snapshot.zones_) {
++      const rrzc_observe::MigrationWindow::Frame* frames[]={&migration_before,&migration_after};
++      for (unsigned side=0;side<2;++side) {
++        const auto& frame=*frames[side];const auto state=frame.Get(z.start);
++        migration<<serial<<','<<z.start<<','<<(side==0?"前":"后")<<','<<frame.enabled<<','<<frame.reliable<<','
++          <<frame.owner<<','<<frame.created_ns<<','<<frame.captured_ns<<','<<ns(trace->origin.time_since_epoch())<<','
++          <<state.sequence<<','<<state.active<<','<<state.last_end_ns<<'\n';
++      }
+       size_t index=z.start/(256*MiB);const auto& x=a.zones.at(index);const auto& y=b.zones.at(index);
+       const auto& h=before.at(z.start);const auto& j=after.at(z.start);
+       bool stable=a.session_hi==b.session_hi&&a.session_lo==b.session_lo&&x.generation==y.generation&&
+@@ -136,7 +147,8 @@ class Observer {
+         <<y.block_id<<','<<y.rc<<','<<y.delta10<<','<<y.delta30<<','<<y.flags<<','<<y.snapshot_ns<<','<<covered[z.start]<<'\n';
+     }
+     for(const auto& m:metadata) live<<serial<<','<<begin<<','<<end<<','<<m.directory<<'/'<<m.relative_filename<<','<<m.file_number<<','<<m.level<<','<<m.size<<','<<m.being_compacted<<','<<m.smallest_seqno<<','<<m.largest_seqno<<','<<m.file_creation_time<<'\n';
+-    zones.flush();files.flush();live.flush();require(zones.good()&&files.good()&&live.good(),"观察记录写入失败");++serial;
++    zones.flush();files.flush();live.flush();migration.flush();
++    require(zones.good()&&files.good()&&live.good()&&migration.good(),"观察记录写入失败");++serial;
+   }
+ };
+ static void put_batch(DB& db,unsigned first,unsigned count,unsigned hot,uint64_t version,bool initial,const rrzc_real::Plan* plan=nullptr) {
