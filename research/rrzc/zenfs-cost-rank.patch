@@ -1,0 +1,45 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -36,6 +36,7 @@
+ #include "rrzc_cost_observe.h"
+ #include "rrzc_guarded_selector.h"
+ #include "rrzc_tail_ablation.h"
++#include "rrzc_cost_rank.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -399,6 +400,7 @@
+       rrzc_v1::ShortShadowRequested(getenv("ZENFS_RRZC_COST_OBSERVE")));
+   const auto tail_ablation=rrzc_tail_ablation::Resolve(
+       getenv("ZENFS_RRZC_TAIL_ABLATION"),guarded);
++  const bool cost_rank=rrzc_rank::Enabled(getenv("ZENFS_RRZC_COST_RANK"),guarded,tail_ablation.requested);
+   const auto v1_mode=rrzc_v1::ResolveMode(shadow_request,real_request,
+       simple_enabled && !simple_weighted,guarded.requested || test_choice_pending ||
+       (real_request && strcmp(real_request,"1")==0 && test_enable && strcmp(test_enable,"1")==0) ||
+@@ -439,6 +441,10 @@
+   if (guarded.observe)
+     Info(logger_,"独立尾部约束：已启用，真实执行=%d，同块短期界限秒=10，额外有效预算字节=%lu，未知回退Greedy，普通替代目标未知",
+          guarded.execute,shadow_extra_budget);
++  if (guarded.observe)
++    Info(logger_,"成本排序：启用=%d，默认ETA优先，仅在原紧迫准入集合内排序，尾部和源复核不变",cost_rank);
++  if (getenv("ZENFS_RRZC_COST_RANK") && strcmp(getenv("ZENFS_RRZC_COST_RANK"),"0") && !cost_rank)
++    Info(logger_,"成本排序：请求未生效，参数或入口冲突，保留原行为");
+   if (tail_ablation.requested && !tail_ablation.enabled)
+     Info(logger_,"尾部消融：拒绝启用，参数或入口不符，保持原行为");
+   if (tail_ablation.enabled)
+@@ -680,8 +686,14 @@
+                shadow_round,growth.original.proposed_zone,growth.original.would_switch,
+                growth.original.predicted_ns,shadow.proposed_zone,shadow.would_switch,shadow.reason);
+           if (guarded.observe) {
+-            const auto proposal=rrzc_v1::EvaluateShortShadow(candidates,usable,growth.evidence,
++            const auto eta_proposal=rrzc_v1::EvaluateShortShadow(candidates,usable,growth.evidence,
+                 recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++            const auto proposal=cost_rank ? rrzc_rank::Evaluate(true,candidates,usable,growth.evidence,
++                recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget) : eta_proposal;
++            Info(logger_,"成本排序核验：轮次=%lu，启用=%d，ETA建议Zone=%lu，生效建议Zone=%lu，排序改变=%d，ETA预测纳秒=%lu，生效预测纳秒=%lu，ETA额外字节=%lu，生效额外字节=%lu",
++                 shadow_round,cost_rank,eta_proposal.proposed_zone,proposal.proposed_zone,
++                 eta_proposal.proposed_zone!=proposal.proposed_zone,eta_proposal.predicted_ns,
++                 proposal.predicted_ns,eta_proposal.extra_valid,proposal.extra_valid);
+             std::map<uint64_t,rrzc_guard::Bounds> bounds;
+             for (const auto& c:candidates) {
+               auto& summary=bounds[c.zone];

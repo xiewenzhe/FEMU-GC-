@@ -1,0 +1,71 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index 478d7fc04..1fcd34f48 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -37,6 +37,7 @@
+ #include "rrzc_guarded_selector.h"
+ #include "rrzc_tail_ablation.h"
+ #include "rrzc_cost_rank.h"
++#include "rrzc_recent_sampler.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -414,6 +415,25 @@ void ZenFS::GCWorker() {
+   const bool cost_enabled=rrzc_cost::Enabled(getenv("ZENFS_RRZC_COST_OBSERVE"),short_enabled);
+   rrzc_cost::ValidityHistory cost_history;
+   rrzc_v1::GrowthHistory growth_history;
++  const bool independent_sampling=rrzc_v1::IndependentSamplingEnabled(
++      getenv("ZENFS_RRZC_RECENT_SAMPLER"),guarded.observe,cost_enabled);
++  // 局部对象先于GCWorker退出销毁并等待查询完成；设备仍由ZenFS持有。
++  rrzc_v1::RecentSampler recent_sampler([&](rrzc_v1::RecentReport* sample) {
++    const auto begin=std::chrono::steady_clock::now();
++    const IOStatus status=zbd_->GetZoneRecentReads(sample);
++    const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now()-begin).count();
++    const bool good=status.ok() && elapsed<=static_cast<int64_t>(2*rrzc_v1::kSecond);
++    Info(logger_,"独立近期采样：可用=%d，主机结束纳秒=%lu，查询纳秒=%ld，设备会话=%lu/%lu，区数=%zu，状态=%s",
++         good,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++             std::chrono::steady_clock::now().time_since_epoch()).count()),
++         static_cast<long>(elapsed),sample->session_hi,sample->session_lo,
++         sample->zones.size(),status.ToString().c_str());
++    return good;
++  });
++  if (independent_sampling) recent_sampler.Start();
++  if (getenv("ZENFS_RRZC_RECENT_SAMPLER"))
++    Info(logger_,"独立近期采样配置：启用=%d，仅独立约束入口可用，默认关闭，不采集有效量，不执行维护，不修改时间界限",independent_sampling);
+   // 沿用已有后续追踪字段；影子或真实入口开启时才输出维护追踪。
+   v1_shadow_.store(shadow_enabled);
+   // 沿用原影子固定实验参数，不调整预测规则、界限或预算。
+@@ -452,7 +472,7 @@ void ZenFS::GCWorker() {
+          !tail_ablation.bypass);
+ 
+   while (run_gc_worker_) {
+-    if (!growth_enabled) {
++    if (!growth_enabled || independent_sampling) {
+       usleep(1000 * 1000 * 10);
+     } else {
+       // 保留原十秒等待期限，不在选区处额外等一秒；查询失败清空历史。
+@@ -625,6 +645,11 @@ void ZenFS::GCWorker() {
+                                                 simple_space_weight);
+       if (shadow_enabled) {
+         ++shadow_round;
++        // 先冻结再查询当前点；禁止把查询期间发布的未来点当作前点。
++        if (independent_sampling) {
++          auto frozen=recent_sampler.Freeze(); growth_history=std::move(frozen.history);
++          Info(logger_,"独立近期采样冻结：轮次=%lu，发布序号=%lu",shadow_round,frozen.sequence);
++        }
+         const auto query_start=std::chrono::steady_clock::now();
+         rrzc_v1::RecentReport recent;
+         const IOStatus recent_status=zbd_->GetZoneRecentReads(&recent);
+@@ -669,7 +694,10 @@ void ZenFS::GCWorker() {
+         auto shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
+             simple_budget,shadow_horizon,shadow_extra_budget);
+         if (growth_enabled) {
+-          if (!frame_ok) growth_history.Clear();
++          if (!frame_ok) {
++            growth_history.Clear();
++            if (independent_sampling) recent_sampler.Clear();
++          }
+           const auto growth=rrzc_v1::EvaluateWithGrowth(candidates,usable,recent,
+               growth_history,simple_budget,shadow_horizon,shadow_extra_budget);
+           for (const auto& c:candidates) {

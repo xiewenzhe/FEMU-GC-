@@ -1,0 +1,87 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index 1fcd34f48..00e003a1c 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -38,6 +38,7 @@
+ #include "rrzc_tail_ablation.h"
+ #include "rrzc_cost_rank.h"
+ #include "rrzc_recent_sampler.h"
++#include "rrzc_pair_rate.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -417,6 +418,9 @@ void ZenFS::GCWorker() {
+   rrzc_v1::GrowthHistory growth_history;
+   const bool independent_sampling=rrzc_v1::IndependentSamplingEnabled(
+       getenv("ZENFS_RRZC_RECENT_SAMPLER"),guarded.observe,cost_enabled);
++  const bool pair_rate=rrzc_v1::PairRateEnabled(getenv("ZENFS_RRZC_PAIR_RATE_SHADOW"),
++      independent_sampling,guarded.observe,guarded.execute);
++  rrzc_v1::PairRateHistory pair_history;
+   // 局部对象先于GCWorker退出销毁并等待查询完成；设备仍由ZenFS持有。
+   rrzc_v1::RecentSampler recent_sampler([&](rrzc_v1::RecentReport* sample) {
+     const auto begin=std::chrono::steady_clock::now();
+@@ -424,6 +428,7 @@ void ZenFS::GCWorker() {
+     const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(
+         std::chrono::steady_clock::now()-begin).count();
+     const bool good=status.ok() && elapsed<=static_cast<int64_t>(2*rrzc_v1::kSecond);
++    if (pair_rate) pair_history.Publish(*sample,good);
+     Info(logger_,"独立近期采样：可用=%d，主机结束纳秒=%lu，查询纳秒=%ld，设备会话=%lu/%lu，区数=%zu，状态=%s",
+          good,static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count()),
+@@ -434,6 +439,8 @@ void ZenFS::GCWorker() {
+   if (independent_sampling) recent_sampler.Start();
+   if (getenv("ZENFS_RRZC_RECENT_SAMPLER"))
+     Info(logger_,"独立近期采样配置：启用=%d，仅独立约束入口可用，默认关闭，不采集有效量，不执行维护，不修改时间界限",independent_sampling);
++  if (getenv("ZENFS_RRZC_PAIR_RATE_SHADOW"))
++    Info(logger_,"双点速率配置：启用=%d，仅独立约束影子可用，不替换旧建议或实际选择，端点间隔半秒至两秒，最旧端点距当前不超过两秒",pair_rate);
+   // 沿用已有后续追踪字段；影子或真实入口开启时才输出维护追踪。
+   v1_shadow_.store(shadow_enabled);
+   // 沿用原影子固定实验参数，不调整预测规则、界限或预算。
+@@ -645,6 +652,8 @@ void ZenFS::GCWorker() {
+                                                 simple_space_weight);
+       if (shadow_enabled) {
+         ++shadow_round;
++        rrzc_v1::PairFrames pair_frozen;
++        if (pair_rate) pair_frozen=pair_history.Freeze();
+         // 先冻结再查询当前点；禁止把查询期间发布的未来点当作前点。
+         if (independent_sampling) {
+           auto frozen=recent_sampler.Freeze(); growth_history=std::move(frozen.history);
+@@ -691,6 +700,38 @@ void ZenFS::GCWorker() {
+                 shadow_round,c.zone,file.file_id,file.filename.c_str(),bytes);
+           }
+         }
++        if (pair_rate) {
++          std::map<uint64_t,rrzc_v1::GrowthEvidence> pair_evidence;
++          for (const auto& c:candidates) {
++            const auto found=usable.find(c.zone);
++            rrzc_v1::PairRateEvidence rate;
++            if (found!=usable.end()) rate=rrzc_v1::CheckPairRate(
++                pair_frozen,recent,found->second,true,shadow_horizon);
++            else rate.reason="当前统计或参数无效";
++            pair_evidence.emplace(c.zone,rrzc_v1::PairAsShadowEvidence(rate));
++            for (size_t i=0;i<pair_frozen.reports.size();++i) {
++              const auto& frame=pair_frozen.reports[i];
++              const auto p=std::find_if(frame.zones.begin(),frame.zones.end(),
++                  [&](const rrzc_v1::RecentBlock& b){return b.zone==c.zone;});
++              if (p==frame.zones.end()) continue;
++              Info(logger_,"双点速率端点：轮次=%lu，Zone=%lu，位置=%zu，会话=%lu/%lu，阈值=%lu，块数=%u，代际=%lu，块编号=%u，PPA=%u/%u/%u/%u，区编号=%u，快照纳秒=%lu，起点纳秒=%lu，RC=%lu，标志=%u",
++                   shadow_round,c.zone,i,frame.session_hi,frame.session_lo,frame.threshold,
++                   frame.blocks_per_zone,p->generation,p->block_id,p->ch,p->lun,p->plane,
++                   p->block,p->zone_index,p->snapshot_ns,p->epoch_start_ns,p->rc,p->flags);
++            }
++            Info(logger_,"双点速率候选：轮次=%lu，Zone=%lu，发布序号=%lu，端点数=%zu，原候选资格=%d，统计准入=%d，增量可知=%d，真实增量=%lu，间隔纳秒=%lu，最旧龄纳秒=%lu，最新龄纳秒=%lu，预测达阈值纳秒=%lu，界限内=%d，原因=%s",
++                 shadow_round,c.zone,pair_frozen.sequence,pair_frozen.reports.size(),
++                 rrzc_simple::Eligible(c,simple_budget),found!=usable.end(),rate.known,
++                 rate.delta,rate.interval_ns,rate.old_age_ns,rate.new_age_ns,
++                 rate.predicted_ns,rate.urgent,rate.reason);
++          }
++          const auto pair_proposal=rrzc_v1::EvaluateShortShadow(candidates,usable,
++              pair_evidence,recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++          Info(logger_,"双点速率建议：轮次=%lu，存在Greedy=%d，GreedyZone=%lu，建议Zone=%lu，会改选=%d，额外有效字节=%lu，预测达阈值纳秒=%lu，实际改选=0，原因=%s，说明=仅为速率建议尚未尾部复核",
++               shadow_round,pair_proposal.greedy.found,pair_proposal.greedy.selected.zone,
++               pair_proposal.proposed_zone,pair_proposal.would_switch,pair_proposal.extra_valid,
++               pair_proposal.predicted_ns,pair_proposal.reason);
++        }
+         auto shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
+             simple_budget,shadow_horizon,shadow_extra_budget);
+         if (growth_enabled) {
