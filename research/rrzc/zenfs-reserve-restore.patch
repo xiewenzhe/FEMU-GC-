@@ -1,0 +1,70 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -2771,6 +2771,10 @@
+       if(live && live->rrzc_content_.load()==rrzc_content::kMixed)
+         return Status::Corruption("内容隔离拒绝挂载已有SST混合Zone");
+     }
++    if (!readonly) {
++      const auto restored=zbd_->ReconcileMigrationReserveContent();
++      if (!restored.ok()) return Status::IOError("挂载预留类别恢复失败",restored.ToString());
++    }
+     Info(logger_,"公共内容隔离配置：启用=1，普通写入与迁移同规则=1，恢复重建=1，跨类别改名拒绝=1");
+   }
+   Info(logger_, "Superblock sequence %d", (int)superblock_->GetSeq());
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -351,6 +351,44 @@
+     if (!ios.ok()) return ios;
+   }
+ 
++  return IOStatus::OK();
++}
++
++// 仅在挂载重建全部文件类别后、业务和维护线程启动前调用。
++IOStatus ZonedBlockDevice::ReconcileMigrationReserveContent() {
++  if (!migration_reserve_enabled_ || !IsContentGuardEnabled()) return IOStatus::OK();
++  std::lock_guard<std::mutex> migrate_lock(migrate_zone_mtx_);
++  if (migrating_) return IOStatus::Corruption("挂载预留恢复期间已有迁移，拒绝换角色");
++  std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
++  Zone* old = migration_reserve_zone_;
++  if (!old || rrzc_content::Claimable(old->rrzc_content_.load(), rrzc_content::kSst))
++    return IOStatus::OK();
++  if (old->IsEmpty() || old->IsFull())
++    return IOStatus::Corruption("错误类别预留不是接管的部分区，拒绝推断令牌归属");
++  Zone* replacement = nullptr;
++  for (auto* zone : io_zones) {
++    if (zone == old || zone == migration_spare_zone_ || !zone->Acquire()) continue;
++    if (!zone->IsEmpty() && !zone->IsFull() && zone->used_capacity_.load() &&
++        zone->rrzc_content_.load() == rrzc_content::kSst) {
++      replacement = zone;
++      break;
++    }
++    const auto released = zone->CheckRelease();
++    if (!released.ok()) return released;
++  }
++  if (!replacement)
++    return IOStatus::IOError("预留接管了非SST部分区且无可交换SST部分区，拒绝无限等待或混写");
++  const auto released = old->CheckRelease();
++  if (!released.ok()) {
++    replacement->CheckRelease();
++    return released;
++  }
++  // 旧区归普通池、新区归预留池；两个都是已活跃部分区，普通活跃总数不变。
++  // 不搬迁数据、不改文件映射、不Finish、不Reset，也不增减物理或主机令牌。
++  migration_reserve_zone_ = replacement;
++  Info(logger_, "挂载预留类别修复：旧Zone=%lu，旧类别=%u，新Zone=%lu，新类别=%u，普通活跃=%ld，数据及WP不变=1，Finish或Reset=0",
++       old->start_, unsigned(old->rrzc_content_.load()), replacement->start_,
++       unsigned(replacement->rrzc_content_.load()), static_cast<long>(active_io_zones_.load()));
+   return IOStatus::OK();
+ }
+ 
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -239,6 +239,7 @@
+   virtual ~ZonedBlockDevice();
+ 
+   IOStatus Open(bool readonly, bool exclusive);
++  IOStatus ReconcileMigrationReserveContent();
+ 
+   bool StrictRR() const {
+     const char* value=getenv("ZENFS_RR_STRICT");

@@ -31,7 +31,7 @@ def reserve_check(row):
     return stable
 
 
-def parse(lines,strategy,tail_ablation=None,cost_rank=None,proposal_model=None):
+def parse(lines,strategy,tail_ablation=None,cost_rank=None,proposal_model=None,budget_for=None):
     ablation=TailAblationLog(tail_ablation,strategy)
     ranking=CostRankLog(cost_rank)
     pending=[];blocks={};gates={};parts={};summaries={};source=[];pool=None;old=None
@@ -101,7 +101,9 @@ def parse(lines,strategy,tail_ablation=None,cost_rank=None,proposal_model=None):
                 greedy,suggest,would,extra,predicted,_=proposal_model.resolve(
                     rid,pending,estimates,(greedy,suggest,would,extra,predicted,None))
             require(tuple(int(raw[k]) for k in ("存在Greedy","GreedyZone","短期建议Zone","原会改选","原额外有效字节","预测达阈值纳秒"))==(int(greedy is not None),greedy or 0,suggest or 0,int(would),extra,predicted),"新建议排序或预算不符")
-            require(raw["真实执行"]==str(int(strategy=="guarded")) and int(raw["界限纳秒"])==10*SECOND and int(raw["预算字节"])==EXTRA,"执行模式或参数改变")
+            # 只有新实验显式传入已独立重算的预算；旧日志仍严格要求原16MiB。
+            expected_budget=EXTRA if budget_for is None else budget_for(rid)
+            require(raw["真实执行"]==str(int(strategy=="guarded")) and int(raw["界限纳秒"])==10*SECOND and int(raw["预算字节"])==expected_budget,"执行模式或参数改变")
             stable=reserve_check(pool)
             for r in source:require(r["轮次"]==rid,"源复核轮次不符")
             source_results=[source_check(r,stable) for r in source]
@@ -109,6 +111,12 @@ def parse(lines,strategy,tail_ablation=None,cost_rank=None,proposal_model=None):
                 alignment=int(parts[greedy][0]["对齐字节"])
                 require(all(int(p["对齐字节"])==alignment for z in (greedy,suggest) for p in parts[z]),"对齐参数不一致")
                 evaluation=ablation.resolve(rid,would,guard(cost[greedy],cost[suggest],pool,alignment))
+                if budget_for is not None:
+                    # 尾部重算本身不变，但不能沿用旧报告中“额外预算不变”的文字。
+                    evaluation.pop('原RR紧迫度及额外有效预算不变',None)
+                    evaluation['原RR紧迫界限不变']=True
+                    evaluation['额外有效预算来源']='本轮独立重算的收益预算'
+                    evaluation['本轮额外有效预算字节']=expected_budget
                 require(raw["尾部允许"]==str(int(evaluation["保留原建议"])) and raw["尾部分类"]==evaluation["分类"],"尾部约束不符")
                 checked=bool(evaluation["保留原建议"] and stable and source_results==[True,True])
                 if evaluation["保留原建议"] and stable:

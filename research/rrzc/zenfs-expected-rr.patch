@@ -1,0 +1,40 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -48 +48,2 @@
+ #include "rrzc_persistent_credit_selector.h"
++#include "rrzc_expected_rr_selector.h"
+@@ -545,0 +547,8 @@
++  const bool expected_requested=getenv("ZENFS_RRZC_EXPECTED_RR") &&
++      !strcmp(getenv("ZENFS_RRZC_EXPECTED_RR"),"1");
++  const bool expected_rr=expected_requested && persistent_credit;
++  if(expected_requested) {
++    Info(logger_,"期望RR配置：请求=1，启用=%d，版本=1，概率尺度=%lu，先选Greedy=0，泊松假设未校准=1",
++        expected_rr,rrzc_expected_rr::kProbabilityScale);
++    if(!expected_rr) Error(logger_,"期望RR配置冲突：须独立启用窗口及持续读分支");
++  }
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -32,2 +32,5 @@
+       rrzc_persistent_credit::Evidence persistence;
+-      const auto cost=persistent_credit ? rrzc_persistent_credit::Estimate(c,
++      rrzc_expected_rr::Evidence expected;
++      const auto cost=expected_rr ? rrzc_expected_rr::Estimate(c,
++          b==usable.end()?nullptr:&b->second,&f,recent,growth_history,shadow_horizon,&expected) :
++          persistent_credit ? rrzc_persistent_credit::Estimate(c,
+@@ -36,0 +40,6 @@
++      if(expected_rr) {
++        persistence=expected.persistence;
++        Info(logger_,"期望RR成本：轮次=%lu，Zone=%lu，版本=1，ETA=%lu，预计留存=%lu，概率可计算=%d，需求概率十亿分数=%lu，原持续读抵扣=%lu，新抵扣=%lu，净复制=%lu，原因=%s",
++            shadow_round,c.zone,cost.eta,cost.retained,expected.probability.known,
++            expected.probability.units,expected.previous_credit,cost.credit,cost.net,expected.reason);
++      }
+@@ -42 +51 @@
+-            persistence.original_credit,cost.credit,persistence.reason);
++            persistence.original_credit,expected_rr ? expected.previous_credit : cost.credit,persistence.reason);
+@@ -43,0 +53 @@
++      if(expected_rr) proof.reason=expected.reason;
+@@ -50 +60,2 @@
+   auto ranked=pair_greedy ? rrzc_direct::Rank(candidates,{}, {},recent.threshold,simple_budget,shadow_horizon) :
++      expected_rr ? rrzc_expected_rr::Rank(candidates,usable,window_forecasts,recent,growth_history,simple_budget,shadow_horizon) :

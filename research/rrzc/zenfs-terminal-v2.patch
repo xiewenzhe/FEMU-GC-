@@ -1,0 +1,42 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -55,7 +55,7 @@
+ #include "rrzc_space_plan.h"
+ #include "rrzc_deadline_selector.h"
+ #include "rrzc_joint_time_selector.h"
+-#include "rrzc_terminal_selector.h"
++#include "rrzc_terminal_v2.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -563,7 +563,7 @@
+   if(terminal_env && ((strcmp(terminal_env,"1") && strcmp(terminal_env,"0")) || !joint_time_enabled)) {
+     Error(logger_,"边界配置非法：须在时间一致模型中显式使用0或1");return;
+   }
+-  Info(logger_,"边界配置：版本=1，启用=%d，共同空间基准=1，互斥回收=1，延期分数估价=1，窗口纳秒=10000000000",terminal_enabled);
++  Info(logger_,"边界配置：版本=2，启用=%d，共同空间基准=1，互斥回收=1，延期分数估价=1，窗口纳秒=10000000000",terminal_enabled);
+   const bool window_credit=window_requested && direct_enabled && independent_sampling &&
+       migration_window_.Enabled() &&
+       !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -253,11 +253,13 @@
+-      const auto revised=rrzc_terminal::Select(boundary,need);
++      const auto revised=rrzc_terminal_v2::Select(boundary,need);
+       Info(logger_,"边界基准：轮次=%lu，完整定价=%d，空间字节=%lu，原选择存在=%d，原选择=%lu",
+           shadow_round,revised.correction_known,revised.reference_space,plan.found,plan.zone);
+-      for(const auto& p:revised.plans) {
+-        Info(logger_,"边界方案：轮次=%lu，首区=%lu，预计空间=%lu，空间缺口=%lu，已定价=%d，延期复制=%s，合计估价=%s",
++      for(const auto& repriced:revised.plans) {
++        const auto& p=repriced.base;
++        Info(logger_,"边界方案：轮次=%lu，首区=%lu，预计空间=%lu，空间缺口=%lu，已定价=%d，延期复制=%s，RR取整补齐=%lu，合计估价=%s",
+             shadow_round,p.base.first,p.expected_space,p.space_gap,p.priced,
+-            rrzc_space_plan::Decimal(p.deferred_copy).c_str(),rrzc_space_plan::Decimal(p.Total()).c_str());
++            rrzc_space_plan::Decimal(p.deferred_copy).c_str(),repriced.rr_rounding,
++            rrzc_space_plan::Decimal(repriced.Total()).c_str());
+         for(const auto& t:p.completion)
+           Info(logger_,"边界补足：轮次=%lu，首区=%lu，Zone=%lu，可用空间=%lu，全份复制=%lu，计价空间=%lu，计价复制=%lu",
+               shadow_round,p.base.first,t.zone,t.available_space,t.full_copy,t.priced_space,t.priced_copy);
+       }

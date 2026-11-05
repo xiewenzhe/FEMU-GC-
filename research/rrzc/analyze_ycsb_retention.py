@@ -9,6 +9,7 @@ from analyze_controlled_zc import ZC_STATS
 from analyze_maintenance_overlap import RR_STATS
 from guarded_rounds import parse
 from retention_log import RetentionLog
+from ycsb_throughput import throughput
 
 MIB=1<<20
 MODES=('greedy','v1','cost','retention')
@@ -34,18 +35,27 @@ def measurements(text,expected_ops,expected_types=('READ','UPDATE')):
     require(set(out)==set(expected_types) and sum(v['次数'] for v in out.values())==expected_ops,'业务请求数不符')
     return out
 
-def independent_profile(properties,expected_ops,ratio='80/20'):
+def independent_profile(properties,expected_ops,ratio='80/20',update_range=None):
     # 新比例必须显式登记；旧调用仍仅接受原80/20，不默默放宽旧结果验收。
     require(ratio in ('80/20','50/50'),'独立读写比例未登记')
     read,update=('0.8','0.2') if ratio=='80/20' else ('0.5','0.5')
+    if update_range is None:
+        range_ok=(properties.get('rrzc.update_key_start','0')=='0'
+            and properties.get('rrzc.update_key_count',properties.get('recordcount'))==properties.get('recordcount'))
+    else:
+        require(tuple(update_range) in ((4096,61440),(4096,258048)) and ratio=='50/50','更新区间未登记')
+        range_ok=(properties.get('rrzc.update_key_start')==str(update_range[0])
+            and properties.get('rrzc.update_key_count')==str(update_range[1]))
     return (expected_ops==1200000 and properties.get('rrzc.independent_keys')=='true'
         and properties.get('rrzc.read_key_count')=='4096'
         and properties.get('readproportion')==read and properties.get('updateproportion')==update
-        and properties.get('requestdistribution')=='uniform')
+        and properties.get('requestdistribution')=='uniform' and range_ok)
 
 
-def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,space_emergency=False,inherited_audit=False,independent_ratio='80/20'):
-    require(mode in MODES,'模式未知')
+def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,space_emergency=False,inherited_audit=False,independent_ratio='80/20',update_range=None,benefit_budget=False,direct_model=False):
+    # 新入口必须显式登记，不让旧调用默默接受动态预算。
+    require((mode=='benefit')==benefit_budget and (mode=='direct')==direct_model and
+        (mode in MODES or benefit_budget or direct_model),'模式未知或新模型未显式登记')
     for name in ('business.exit','verify.exit','runner.exit'):
         require((root/name).read_text().strip()=='0',name+'未成功')
     for line in (root/'logs.sha256').read_text().splitlines():
@@ -58,7 +68,8 @@ def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,spa
     for s in (root/'workload.properties').read_text().splitlines():
         if '=' in s and not s.startswith('#'):
             k,v=s.split('=',1);properties[k]=v
-    independent=independent_profile(properties,expected_ops,independent_ratio)
+    independent=independent_profile(properties,expected_ops,independent_ratio,update_range)
+    if update_range is not None:require(independent,'更新范围与登记先导不符')
     if independent_ratio!='80/20':require(independent,'新读写比例只用于已登记120万次独立负载')
     require(expected_ops in (40000,600000,2400000) or independent,'不是已登记的短测或正式规模')
     require(properties['recordcount']=='655360' and properties['operationcount']==str(expected_ops),'负载规模不符')
@@ -76,11 +87,23 @@ def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,spa
             for row in log.read_text(errors='replace').splitlines():
                 if re.search(r'Zone allocation failure|Corruption:|Waiting after background (compaction|flush) error',row):
                     background_errors.append(dict(文件=str(log.relative_to(root)),原文=row))
-    require(f'独立尾部约束：已启用，真实执行={int(mode!="greedy")}，' in text,'策略入口未生效')
+    require(f'独立尾部约束：已启用，真实执行={int(mode!="greedy" and not direct_model)}，' in text,'策略入口未生效')
     require(f'成本排序：启用={int(mode=="cost")}，' in text,'成本排序入口不符')
     require(f'留存收益配置：采样=1，执行={int(mode=="retention")}，' in text,'留存入口不符')
     require(set(re.findall(r'GC 检查：.*启动水平=(\d+)%',text))=={'20'},'未确认原20%GC条件')
-    model=RetentionLog(mode=='retention')
+    if direct_model:
+        from direct_analysis import parse_direct
+        require('统一选区配置：启用=1，' in text and '独立约束决策：' not in text,'统一入口未启用或仍执行旧策略')
+        model=RetentionLog(False)
+        current_forecasts=[fields(s,'统一留存：') for s in lines if '统一留存：' in s]
+        model.known=sum(r['可知']=='1' for r in current_forecasts)
+        model.declining=sum(r['可知']=='1' and int(r['三十秒减少'])>0 for r in current_forecasts)
+    elif benefit_budget:
+        from benefit_log import BenefitLog
+        require('收益预算配置：观察=1，执行=1，' in text,'收益预算入口未生效')
+        model=BenefitLog(True)
+    else:
+        model=RetentionLog(mode=='retention')
     emergency=[];replay_lines=lines
     space_decisions=[]
     if space_emergency:
@@ -92,9 +115,12 @@ def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,spa
     # 维护失败仍保留可读诊断，但不放宽正式逐轮及迁移完成验收。
     decisions=[];maintenance=[];decision_error=None
     try:
-        if '独立约束决策：' in text:
+        if direct_model:
+            decisions,_,maintenance=parse_direct(replay_lines)
+        elif '独立约束决策：' in text:
             decisions,_,maintenance=parse(replay_lines,'greedy' if mode=='greedy' else 'guarded',
-                cost_rank=mode=='cost',proposal_model=model)
+                cost_rank=mode=='cost',proposal_model=model,
+                budget_for=model.budget_for if benefit_budget else None)
         else:require('简单双因素候选：' not in text,'候选日志未闭合')
     except (ValueError,KeyError) as e:decision_error=str(e)
     zc=[(i,tuple(map(int,m.groups()))) for i,s in enumerate(lines) if (m:=ZC_STATS.search(s))]
@@ -128,6 +154,7 @@ def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,spa
         phases[name]=dict(ZC尝试=len(z),ZC重置=sum(s[2] for s in z),RR尝试=len(r),RR重置=sum(s[2] for s in r),
             ZC迁移MiB=sum(s[1] for s in z)/MIB,RR迁移MiB=sum(s[1] for s in r)/MIB)
     complete=not errors and not background_errors and not decision_error and all(r[2]==1 for _,r in zc+rr)
+    history_model=model.retention if benefit_budget else model
     return dict(验收通过=complete,模式=mode,软件清单SHA256=sha(root/'software.sha256'),
         无WAL实验=nowal,计划业务操作数=expected_ops,继承前阶段校验=inherited_audit,
         公共单区恢复=single_recovery,应急单区次数=sum(d['存在']=='1' for d in emergency),应急决策=emergency,
@@ -136,12 +163,13 @@ def audit(root,mode,*,nowal=False,expected_ops=2400000,single_recovery=False,spa
         请求轨迹SHA256=sha(root/'audit.requests'),最新值清单SHA256=sha(root/'audit.expected'),
         ZC尝试=len(zc),ZC重置=sum(r[2] for _,r in zc),RR尝试=len(rr),RR重置=sum(r[2] for _,r in rr),
         ZC迁移MiB=sum(r[1] for _,r in zc)/MIB,RR迁移MiB=sum(r[1] for _,r in rr)/MIB,总迁移MiB=moved/MIB,
-        调用延迟=timings,实际改选次数=sum(d['独立核验改选'] for d in decisions),
-        留存历史可知候选次数=model.known,预测确有退役候选次数=model.declining,
+        调用延迟=timings,吞吐量=throughput(ycsb,expected_ops,properties),
+        实际改选次数=sum(d['独立核验改选'] for d in decisions),
+        留存历史可知候选次数=history_model.known,预测确有退役候选次数=history_model.declining,
         维护错误原文=errors,后台错误原文=background_errors,决策核验错误=decision_error,分阶段维护=phases,
         迁移口径='复制片段的逻辑字节，包含重复复制；不是NAND物理写入量。分阶段按维护完成日志时间归类，交界一秒单列，不推断跨界维护各阶段的实际复制比例。',
         决策=decisions,维护=maintenance,
-        已验证='全键最新值哈希、请求计数、逐轮短期准入与尾部复核、留存评分及排序、完整复制账目；原始留存采样已归档',
+        已验证='全键最新值哈希、请求计数、逐轮短期准入与尾部复核、留存评分及排序、完整复制账目；原始留存采样已归档'+('；独立重算收益预算、净成本及改选排序' if benefit_budget else ''),
         未确认='留存外推准确率、完整原始采样发布顺序重放、同一逻辑片段重复迁移量、长期稳态与统计显著性',
         边界='单次串行对照；相同请求与库不保证并发压实和物理布局相同；Update含Get再Put。平均值来自原始调用纳秒和，分位来自HdrHistogram；审计、请求生成和节流不在调用计时内，但影响墙钟吞吐。')
 

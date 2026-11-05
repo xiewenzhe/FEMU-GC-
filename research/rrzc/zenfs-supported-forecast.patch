@@ -1,0 +1,84 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -56,6 +56,7 @@
+ #include "rrzc_deadline_selector.h"
+ #include "rrzc_joint_time_selector.h"
+ #include "rrzc_terminal_v2.h"
++#include "rrzc_supported_forecast.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -557,6 +558,14 @@
+   if(joint_time_env && (strcmp(joint_time_env,"1") || !deadline_enabled)) {
+     Error(logger_,"时间一致配置非法：须在时序空间方案中显式启用1");return;
+   }
++  const char* supported_env=getenv("ZENFS_RRZC_SUPPORTED");
++  const bool supported_enabled=supported_env && !strcmp(supported_env,"1");
++  if(supported_env && strcmp(supported_env,"0") && strcmp(supported_env,"1")) {
++    Error(logger_,"支持预测配置非法：仅允许显式0或1");return;
++  }
++  if(supported_enabled)
++    Info(logger_,"支持预测配置：版本=2，启用=1，相邻不重叠区间=1，单段最小纳秒=500000000，总证据最小纳秒=2000000000，总证据最大纳秒=4000000000，同速率检验门槛十亿分数=50000000，不相容才缩短窗口=1，比例留存=1，未校准=1");
++  else
+   Info(logger_,"时间一致配置：版本=1，启用=%d，旧速率估计不变=1，事件截止原窗口及预计存活期=1，条件到达时间=1",joint_time_enabled);
+   const char* terminal_env=getenv("ZENFS_RRZC_TERMINAL");
+   const bool terminal_enabled=terminal_env && !strcmp(terminal_env,"1");
+@@ -589,6 +598,10 @@
+     Info(logger_,"期望RR配置：请求=1，启用=%d，版本=1，概率尺度=%lu，先选Greedy=0，泊松假设未校准=1",
+         expected_rr,rrzc_expected_rr::kProbabilityScale);
+     if(!expected_rr) Error(logger_,"期望RR配置冲突：须独立启用窗口及持续读分支");
++  }
++
++  if(supported_enabled && (!joint_time_enabled || !expected_rr)) {
++    Error(logger_,"支持预测配置冲突：须实际启用时间一致及期望RR执行分支");return;
+   }
+ 
+   Info(logger_,"留存收益配置：采样=%d，执行=%d，外推秒=10，窗口秒=10/30，未知回退Greedy，原RR和GC条件不变",
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -88,21 +88,33 @@
+       const auto b=usable.find(c.zone);const auto f=window_forecasts.find(c.zone);
+       rrzc_deadline::Evidence e;
+       rrzc_joint_time::Evidence joint;
+-      const auto cost=joint_time_enabled ? rrzc_joint_time::Estimate(c,b==usable.end()?nullptr:&b->second,
++      rrzc_supported::Evidence support;
++      const auto cost=supported_enabled ? rrzc_supported::Estimate(c,b==usable.end()?nullptr:&b->second,
++          f==window_forecasts.end()?nullptr:&f->second,recent,deadline_frozen.Frames(),shadow_horizon,&support,rrzc_supported::Scope::CompatibleRates) :
++          joint_time_enabled ? rrzc_joint_time::Estimate(c,b==usable.end()?nullptr:&b->second,
+           f==window_forecasts.end()?nullptr:&f->second,recent,deadline_frozen,shadow_horizon,&joint) :
+           rrzc_deadline::Estimate(c,b==usable.end()?nullptr:&b->second,
+           f==window_forecasts.end()?nullptr:&f->second,recent,deadline_frozen,shadow_horizon,&e);
+-      if(joint_time_enabled) {
++      if(supported_enabled) {
++        e.window=support.window;e.probability=support.probability;e.reason=support.reason;
++        Info(logger_,"支持预测成本：轮次=%lu，Zone=%lu，近期可知=%d，第一增量=%lu，第一间隔=%lu，第二增量=%lu，第二间隔=%lu，速率增量=%lu，速率间隔=%lu，事件窗口=%lu，条件到达=%lu，风险可知=%d，ETA=%lu，预计留存=%lu，概率可知=%d，概率十亿分数=%lu，同速率可计算=%d，同速率检验十亿分数=%lu，RR复制=%lu，净复制=%lu，原因=%s",
++            shadow_round,c.zone,support.growth.known,support.growth.first_delta,support.growth.first_span,
++            support.growth.second_delta,support.growth.second_span,support.rate_delta,support.rate_span,
++            support.event_window,support.conditional_ns,cost.risk_known,cost.eta,cost.retained,
++            support.probability.known,support.probability.units,support.compatibility.known,support.compatibility.units,cost.credit,cost.net,support.reason);
++      } else if(joint_time_enabled) {
+         e=joint.base;
+         Info(logger_,"时间一致证据：轮次=%lu，Zone=%lu，预计存活纳秒=%lu，事件窗口纳秒=%lu，条件到达纳秒=%lu",
+             shadow_round,c.zone,joint.lifetime_ns,joint.event_window_ns,joint.conditional_ns);
+       }
+       deadline_costs.emplace(c.zone,cost);deadline_evidence.emplace(c.zone,e);
++      if(!supported_enabled) {
+       const auto& previous=e.growth.previous;
+       Info(logger_,"时序读预测：轮次=%lu，Zone=%lu，近期可知=%d，前快照=%lu，前RC=%lu，前代际=%lu，前块=%u，前PPA=%u/%u/%u/%u，近期增量=%lu，近期间隔=%lu，风险可知=%d，ETA=%lu，预计留存=%lu，窗口=%lu，概率可知=%d，概率十亿分数=%lu，RR复制=%lu，净复制=%lu，原因=%s",
+           shadow_round,c.zone,e.growth.known,previous.snapshot_ns,previous.rc,previous.generation,previous.block_id,
+           previous.ch,previous.lun,previous.plane,previous.block,e.growth.delta,e.growth.interval_ns,cost.risk_known,cost.eta,
+           cost.retained,e.window.window,e.probability.known,e.probability.units,cost.credit,cost.net,e.reason);
++      }
+     }
+   }
+   if(stable_credit) {
+@@ -242,6 +254,9 @@
+         bool known=false;uint64_t valid=x.row.candidate.valid;
+         if(b!=usable.end())valid=rrzc_terminal::TerminalValid(x.row.candidate,
+             f==window_forecasts.end()?nullptr:&f->second,b->second.generation,shadow_horizon,&known);
++        if(supported_enabled && known && !rrzc_supported::Live(x.row.candidate.valid,f->second,shadow_horizon,&valid)) {
++          known=false;valid=x.row.candidate.valid;
++        }
+         boundary.push_back({x,known,valid});
+         Info(logger_,"边界留存：轮次=%lu，Zone=%lu，可知=%d，窗口纳秒=%lu，末态有效=%lu",
+             shadow_round,x.row.candidate.zone,known,shadow_horizon,valid);

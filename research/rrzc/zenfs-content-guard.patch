@@ -1,0 +1,246 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+index 487880502..ccb66bb72 100644
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -1318,6 +1318,25 @@ IOStatus ZenFS::ReadReclaimOneZone() {
+     }
+   }
+ 
++  if (zbd_->IsContentGuardEnabled()) {
++    const auto time_ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count());
++    Info(logger_,"RR风险帧：时点纳秒=%lu，区数=%zu",time_ns,snapshot.zones_.size());
++    for(const auto& observed:snapshot.zones_) {
++      const auto p=std::find_if(pressure.zones.begin(),pressure.zones.end(),
++          [&](const ZoneReadPressure& row){return row.start==observed.start;});
++      auto* live=zbd_->GetIOZone(observed.start);
++      const bool known=live && p!=pressure.zones.end() && diagnostic_before.count(observed.start) &&
++          diagnostic_after.count(observed.start) && IsMaintenanceWindowStable(
++          diagnostic_before.at(observed.start),diagnostic_after.at(observed.start),live->GetResetState());
++      Info(logger_,"RR风险状态：时点纳秒=%lu，Zone=%lu，可信=%d，代际=%lu，序号=%lu，有效=%lu，最大RC=%lu，阈值=%lu，达阈值块=%u，覆盖=%lu，含非SST=%d",
++          time_ns,observed.start,known,live ? live->GetResetState().generation : 0,
++          live ? live->GetResetState().sequence : 0,observed.used_capacity,
++          p!=pressure.zones.end() ? p->max_block_reads : 0,pressure.read_threshold,
++          p!=pressure.zones.end() ? p->blocks_at_threshold : 0,covered_bytes[observed.start],
++          non_sst_zones.count(observed.start)!=0);
++    }
++  }
+   for (const auto& zone_pressure : pressure.zones) {
+     if (zone_pressure.blocks_at_threshold == 0) continue;
+     Zone* io_zone = zbd_->GetIOZone(zone_pressure.start);
+@@ -2106,6 +2125,8 @@ IOStatus ZenFS::RenameFileNoLock(const std::string& src_path,
+   std::string source_path = FormatPathLexically(src_path);
+   std::string dest_path = FormatPathLexically(dst_path);
+   IOStatus s;
++  if (zbd_->IsContentGuardEnabled() && rrzc_content::Classify(source_path)!=rrzc_content::Classify(dest_path))
++    return IOStatus::NotSupported("内容隔离模式禁止跨SST类别改名");
+ 
+   Debug(logger_, "Rename file: %s to : %s\n", source_path.c_str(),
+         dest_path.c_str());
+@@ -2169,6 +2190,8 @@ IOStatus ZenFS::LinkFile(const std::string& file, const std::string& link,
+ 
+     src_file = GetFileNoLock(fname);
+     if (src_file != nullptr) {
++      if (zbd_->IsContentGuardEnabled() && rrzc_content::Classify(fname)!=rrzc_content::Classify(lname))
++        return IOStatus::NotSupported("内容隔离模式禁止跨SST类别硬链接");
+       src_file->AddLinkName(lname);
+       files_.insert(std::make_pair(lname, src_file));
+       s = SyncFileMetadataNoLock(src_file);
+@@ -2568,6 +2591,29 @@ Status ZenFS::Mount(bool readonly) {
+     }
+   }
+ 
++  if (zbd_->IsContentGuardEnabled()) {
++    // Repair和元数据恢复已完成，尚未启动维护线程；不修改盘上格式。
++    std::lock_guard<std::mutex> lock(files_mtx_);
++    for(const auto& it:files_) {
++      const auto& file=it.second;const auto content=rrzc_content::Classify(file->GetFilename());
++      for(const auto& name:file->GetLinkFiles())
++        if(rrzc_content::Classify(name)!=content) return Status::Corruption("恢复文件含跨类别链接");
++      for(const auto* ext:file->GetExtents()) ext->zone_->rrzc_content_.fetch_or(content);
++      if(file->HasActiveExtent()) {
++        auto* active=zbd_->GetIOZone(file->GetExtentStart());
++        if(!active) return Status::Corruption("内容恢复活动片段无Zone");
++        active->rrzc_content_.fetch_or(content);
++      }
++    }
++    std::vector<ZoneSnapshot> content_snapshot;
++    zbd_->GetZoneSnapshot(content_snapshot);
++    for(const auto& observed:content_snapshot) {
++      auto* live=zbd_->GetIOZone(observed.start);
++      if(live && live->rrzc_content_.load()==rrzc_content::kMixed)
++        return Status::Corruption("内容隔离拒绝挂载已有SST混合Zone");
++    }
++    Info(logger_,"公共内容隔离配置：启用=1，普通写入与迁移同规则=1，恢复重建=1，跨类别改名拒绝=1");
++  }
+   Info(logger_, "Superblock sequence %d", (int)superblock_->GetSeq());
+   Info(logger_, "Finish threshold %u", superblock_->GetFinishTreshold());
+   Info(logger_, "Filesystem mount OK");
+diff --git a/fs/io_zenfs.cc b/fs/io_zenfs.cc
+index 93506b2f9..f6e880256 100644
+--- a/fs/io_zenfs.cc
++++ b/fs/io_zenfs.cc
+@@ -478,7 +478,7 @@ void ZoneFile::PushExtent() {
+ 
+ IOStatus ZoneFile::AllocateNewZone() {
+   Zone* zone;
+-  IOStatus s = zbd_->AllocateIOZone(lifetime_, io_type_, &zone);
++  IOStatus s = zbd_->AllocateIOZone(lifetime_, io_type_, &zone,rrzc_content::Classify(GetFilename()));
+ 
+   if (!s.ok()) return s;
+   if (!zone) {
+diff --git a/fs/zbd_zenfs.cc b/fs/zbd_zenfs.cc
+index 9825695ab..fd46db75a 100644
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -110,6 +110,7 @@ IOStatus Zone::Reset() {
+ 
+   wp_ = start_;
+   lifetime_ = Env::WLTH_NOT_SET;
++  rrzc_content_.store(rrzc_content::kUnknown);
+   reset_generation_.fetch_add(1);
+   reset_generation_known_.store(true);
+   reset_sequence_.fetch_add(1);
+@@ -728,7 +729,7 @@ IOStatus ZonedBlockDevice::FinishCheapestIOZone() {
+ 
+ IOStatus ZonedBlockDevice::GetBestOpenZoneMatch(
+     Env::WriteLifeTimeHint file_lifetime, unsigned int *best_diff_out,
+-    Zone **zone_out, uint32_t min_capacity, std::string *observation) {
++    Zone **zone_out, uint32_t min_capacity, std::string *observation,uint8_t content) {
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   Zone *allocated_zone = nullptr;
+   IOStatus s;
+@@ -759,6 +760,7 @@ IOStatus ZonedBlockDevice::GetBestOpenZoneMatch(
+         }
+       }
+       if ((z->used_capacity_ > 0) && !z->IsFull() &&
++          (!IsContentGuardEnabled() || rrzc_content::Compatible(z->rrzc_content_.load(),content)) &&
+           z->capacity_ >= min_capacity) {
+         unsigned int diff = GetLifeTimeDiff(z->lifetime_, file_lifetime);
+         if (diff <= best_diff) {
+@@ -996,7 +998,7 @@ IOStatus ZonedBlockDevice::TakeMigrateZone(Zone **out_zone,
+ 
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   auto s =
+-      GetBestOpenZoneMatch(file_lifetime, &best_diff, out_zone, min_capacity);
++      GetBestOpenZoneMatch(file_lifetime, &best_diff, out_zone, min_capacity,nullptr,rrzc_content::kSst);
+   if (migration_reserve_enabled_ && s.ok() && *out_zone == nullptr) {
+     std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
+     s = EnsureMigrationReserve();
+@@ -1060,6 +1062,18 @@ IOStatus ZonedBlockDevice::TakeMigrateZone(Zone **out_zone,
+     }
+   }
+   if (s.ok() && (*out_zone) != nullptr) {
++    if (IsContentGuardEnabled()) {
++      const auto before=(*out_zone)->rrzc_content_.load();
++      if (!rrzc_content::Claimable(before,rrzc_content::kSst)) {
++        std::lock_guard<std::mutex> reserve_lock(migration_reserve_mtx_);
++        if(*out_zone!=migration_reserve_zone_) (*out_zone)->CheckRelease();
++        *out_zone=nullptr;migrating_=false;migrate_resource_.notify_one();
++        return IOStatus::Corruption("迁移目标内容类别冲突");
++      }
++      (*out_zone)->rrzc_content_.store(rrzc_content::kSst);
++      Info(logger_,"公共内容分配：阶段=迁移，Zone=%lu，原类别=%u，请求类别=1，实际类别=1",
++          (*out_zone)->start_,static_cast<unsigned>(before));
++    }
+     Info(logger_, "TakeMigrateZone: %lu", (*out_zone)->start_);
+   } else {
+     migrating_ = false;
+@@ -1070,7 +1084,7 @@ IOStatus ZonedBlockDevice::TakeMigrateZone(Zone **out_zone,
+ }
+ 
+ IOStatus ZonedBlockDevice::AllocateIOZone(Env::WriteLifeTimeHint file_lifetime,
+-                                          IOType io_type, Zone **out_zone) {
++                                          IOType io_type, Zone **out_zone,uint8_t content) {
+   Zone *allocated_zone = nullptr;
+   unsigned int best_diff = LIFETIME_DIFF_NOT_GOOD;
+   int new_zone = 0;
+@@ -1120,7 +1134,7 @@ IOStatus ZonedBlockDevice::AllocateIOZone(Env::WriteLifeTimeHint file_lifetime,
+ 
+   /* Try to fill an already open zone(with the best life time diff) */
+   s = GetBestOpenZoneMatch(file_lifetime, &best_diff, &allocated_zone, 0,
+-                          allocation_diag_enabled_ ? &match_observation : nullptr);
++                          allocation_diag_enabled_ ? &match_observation : nullptr,content);
+   if (!s.ok()) {
+     PutOpenIOZoneToken();
+     return s;
+@@ -1242,7 +1256,7 @@ IOStatus ZonedBlockDevice::AllocateIOZone(Env::WriteLifeTimeHint file_lifetime,
+             // 部分区使用已有活跃令牌；不放宽寿命差到 100。
+             unsigned int fallback_diff = LIFETIME_DIFF_NOT_GOOD;
+             s = GetBestOpenZoneMatch(file_lifetime, &fallback_diff,
+-                                    &allocated_zone);
++                                    &allocated_zone,0,nullptr,content);
+             if (!s.ok()) {
+               PutOpenIOZoneToken();
+               return s;
+@@ -1277,6 +1291,17 @@ IOStatus ZonedBlockDevice::AllocateIOZone(Env::WriteLifeTimeHint file_lifetime,
+ 
+   if (allocated_zone) {
+     assert(allocated_zone->IsBusy());
++    if (IsContentGuardEnabled()) {
++      const auto before=allocated_zone->rrzc_content_.load();
++      if (!rrzc_content::Claimable(before,content)) {
++        allocated_zone->CheckRelease();PutOpenIOZoneToken();
++        if(new_zone)PutActiveIOZoneToken();
++        return IOStatus::Corruption("普通分配目标内容类别冲突");
++      }
++      allocated_zone->rrzc_content_.store(content);
++      Info(logger_,"公共内容分配：阶段=普通，Zone=%lu，原类别=%u，请求类别=%u，实际类别=%u",
++          allocated_zone->start_,static_cast<unsigned>(before),static_cast<unsigned>(content),static_cast<unsigned>(content));
++    }
+     if (space_wait)
+       Info(logger_,"空间紧急分配恢复：Zone=%lu，文件寿命=%d，IO类型=%d，成功=1，等待登记即将撤销",
+            allocated_zone->start_,static_cast<int>(file_lifetime),static_cast<int>(io_type));
+@@ -1369,6 +1394,11 @@ IOStatus ZonedBlockDevice::ExchangeMigrationReserve(uint64_t required) {
+   Zone* next=nullptr;
+   for (auto* zone:io_zones) {
+     if (zone==old || !zone->Acquire()) continue;
++    if (IsContentGuardEnabled() && zone->rrzc_content_.load()!=rrzc_content::kSst) {
++      const auto released=zone->CheckRelease();
++      if (!released.ok()) {if(next)next->CheckRelease();return released;}
++      continue;
++    }
+     const rrzc_exchange::State current{zone->start_,zone->capacity_,zone->max_capacity_,
+         zone->used_capacity_.load(),zone->wp_};
+     if (rrzc_exchange::CanExchange(required,previous,current) &&
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+index 0bb259524..a1773b123 100644
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -28,6 +28,7 @@
+ #include "metrics.h"
+ #include "rrzc_recent_log.h"
+ #include "rrzc_cost_observe.h"
++#include "rrzc_zone_content.h"
+ #include "rrzc_allocation_queue.h"
+ #include "rrzc_space_emergency.h"
+ #include "rocksdb/env.h"
+@@ -97,6 +98,8 @@ class Zone {
+   uint64_t wp_;
+   Env::WriteLifeTimeHint lifetime_;
+   std::atomic<uint64_t> used_capacity_;
++  // 受Zone独占保护写入；挂载重建阶段尚无业务/维护线程。
++  std::atomic<uint8_t> rrzc_content_{rrzc_content::kUnknown};
+ 
+   IOStatus Reset();
+   ZoneResetState GetResetState() const;
+@@ -236,7 +239,8 @@ class ZonedBlockDevice {
+   Zone *GetIOZone(uint64_t offset);
+ 
+   IOStatus AllocateIOZone(Env::WriteLifeTimeHint file_lifetime, IOType io_type,
+-                          Zone **out_zone);
++                          Zone **out_zone,uint8_t content=rrzc_content::kOther);
++  bool IsContentGuardEnabled() const {return rrzc_content::Enabled(getenv("ZENFS_RRZC_CONTENT_GUARD"));}
+   IOStatus AllocateMetaZone(Zone **out_meta_zone);
+ 
+   uint64_t GetFreeSpace();
+@@ -311,7 +315,8 @@ class ZonedBlockDevice {
+   IOStatus GetBestOpenZoneMatch(Env::WriteLifeTimeHint file_lifetime,
+                                 unsigned int *best_diff_out, Zone **zone_out,
+                                 uint32_t min_capacity = 0,
+-                                std::string *observation = nullptr);
++                                std::string *observation = nullptr,
++                                uint8_t content=rrzc_content::kOther);
+   IOStatus AllocateEmptyZone(Zone **zone_out,
+                             std::string *observation = nullptr);
+ };

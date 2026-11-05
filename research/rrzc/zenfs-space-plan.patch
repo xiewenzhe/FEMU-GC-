@@ -1,0 +1,90 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -52,6 +52,7 @@
+ #include "rrzc_reserve_exchange.h"
+ #include "rrzc_exact_live.h"
+ #include "rrzc_candidate_pool.h"
++#include "rrzc_space_plan.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -534,6 +535,12 @@ void ZenFS::GCWorker() {
+   if(!candidate_pool.valid) {
+     Error(logger_,"候选范围配置非法：只接受original或直接选区入口的expanded，停止实验维护线程");return;
+   }
++  const char* space_plan_env=getenv("ZENFS_RRZC_SPACE_PLAN");
++  const bool space_plan=space_plan_env && !strcmp(space_plan_env,"1");
++  if(space_plan_env && (strcmp(space_plan_env,"1") || !direct_enabled || !candidate_pool.expanded)) {
++    Error(logger_,"空间方案配置非法：只接受直接选区及expanded候选下的显式1，停止实验维护线程");return;
++  }
++  Info(logger_,"空间方案配置：版本=1，启用=%d，外部GC检查不变=1，按字节需求=1，预测RR空间不抵当前缺口=1，仅执行首区=1",space_plan);
+   const bool window_credit=window_requested && direct_enabled && independent_sampling &&
+       migration_window_.Enabled() &&
+       !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -16,6 +16,7 @@
+   Info(logger_,"稳定收益配对模式：轮次=%lu，Greedy=%d，稳定模型=%d，共用安全复核=1",
+       shadow_round,pair_greedy,stable_credit);
+   std::map<uint64_t,rrzc_window_credit::Retention> window_forecasts;
++  std::map<uint64_t,uint64_t> forecast_rr_space;
+   if(window_credit) {
+     for(const auto& c:candidates) {
+       const auto point=retention_current.zones.find(c.zone);
+@@ -39,6 +40,13 @@
+               &f,recent.threshold,shadow_horizon,&proof);
+       if(expected_rr) {
+         persistence=expected.persistence;
++        if(expected.probability.known)
++          forecast_rr_space[c.zone]=uint64_t(__uint128_t(c.capacity-cost.retained)*
++              expected.probability.units/rrzc_expected_rr::kProbabilityScale);
++        if(space_plan)
++          Info(logger_,"空间方案RR空间：轮次=%lu，Zone=%lu，概率可知=%d，概率十亿分数=%lu，容量=%lu，预计留存=%lu，预计RR回收=%lu",
++              shadow_round,c.zone,expected.probability.known,expected.probability.units,c.capacity,
++              cost.retained,forecast_rr_space.count(c.zone)?forecast_rr_space.at(c.zone):0);
+         Info(logger_,"期望RR成本：轮次=%lu，Zone=%lu，版本=1，ETA=%lu，预计留存=%lu，概率可计算=%d，需求概率十亿分数=%lu，原持续读抵扣=%lu，新抵扣=%lu，净复制=%lu，原因=%s",
+             shadow_round,c.zone,cost.eta,cost.retained,expected.probability.known,
+             expected.probability.units,expected.previous_credit,cost.credit,cost.net,expected.reason);
+@@ -165,12 +173,37 @@
+         reserve.remaining,reserve.valid,source,row.safe,window_credit ? window_forecasts.at(c.zone).known : f.known,spare_ok);
+   }
+   decision={};
+-  for (const auto& row:ranked) if (row.safe) {
+-    decision.found=true;decision.selected=row.candidate;break;
++  if(space_plan) {
++    // 聚合空间不是空Zone保证；分配等待时保留进展路径。快照未知也不作无操作。
++    const uint64_t plan_free=zbd_->GetFreeSpace();
++    const uint64_t plan_non_free=zbd_->GetUsedSpace()+zbd_->GetReclaimableSpace();
++    const auto need=rrzc_space_plan::Demand(plan_free,plan_non_free,zbd_->GetAllocationWaiters(),GC_START_LEVEL);
++    std::vector<rrzc_space_plan::Input> inputs;
++    for(const auto& row:ranked)inputs.push_back({row,forecast_rr_space.count(row.candidate.zone)?
++        forecast_rr_space.at(row.candidate.zone):0});
++    const auto plan=rrzc_space_plan::Select(inputs,need);
++    Info(logger_,"空间方案需求：轮次=%lu，可知=%d，空闲=%lu，非空闲=%lu，分配等待=%lu，目标字节=%lu，缺口字节=%lu，目标百分比=%u",
++        shadow_round,need.known,need.free,need.non_free,need.waiters,need.target,need.bytes,unsigned(GC_START_LEVEL));
++    for(const auto& p:plan.plans) {
++      std::string members;for(const auto id:p.zones){if(!members.empty())members+="/";members+=std::to_string(id);}
++      Info(logger_,"空间方案候选：轮次=%lu，首区=%lu，足够=%d，计划区数=%zu，计划区=%s，当前复制=%s，当前回收=%s，未选预计RR复制=%s，未选预计RR空间=%s，预计总复制=%s，实际执行仅首区=1",
++          shadow_round,p.first,p.sufficient,p.zones.size(),members.c_str(),rrzc_space_plan::Decimal(p.copy).c_str(),
++          rrzc_space_plan::Decimal(p.reclaimed).c_str(),rrzc_space_plan::Decimal(p.future_rr_copy).c_str(),
++          rrzc_space_plan::Decimal(p.future_rr_space).c_str(),rrzc_space_plan::Decimal(p.Total()).c_str());
++    }
++    if(plan.found)for(const auto& row:ranked)if(row.candidate.zone==plan.zone){
++      decision.found=true;decision.selected=row.candidate;break;
++    }
++    Info(logger_,"空间方案决策：轮次=%lu，实际存在=%d，实际Zone=%lu，仅进展=%d，原因=%s",
++        shadow_round,decision.found,decision.found?decision.selected.zone:0,plan.progress_only,plan.reason);
++  } else {
++    for (const auto& row:ranked) if (row.safe) {
++      decision.found=true;decision.selected=row.candidate;break;
++    }
+   }
+   // 不安全的第一名只跳过自身，继续按同一模型排序；不回退Greedy。
+   v1_selected=decision.found;v1_switched=false;v1_extra_valid=0;
+   v1_actual_zone=decision.found ? decision.selected.zone : 0;
+-  Info(logger_,"统一决策：轮次=%lu，候选数=%zu，排序数=%zu，实际存在=%d，实际Zone=%lu，界限纳秒=%lu，回收资格=%lu，先选Greedy=0",
++  if(!space_plan)Info(logger_,"统一决策：轮次=%lu，候选数=%zu，排序数=%zu，实际存在=%d，实际Zone=%lu，界限纳秒=%lu，回收资格=%lu，先选Greedy=0",
+       shadow_round,candidates.size(),ranked.size(),decision.found,v1_actual_zone,shadow_horizon,simple_budget);
+ }

@@ -1,0 +1,27 @@
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -56,6 +56,7 @@
+ #include "rrzc_deadline_selector.h"
+ #include "rrzc_joint_time_selector.h"
+ #include "rrzc_all_blocks_io.h"
++#include "rrzc_triggered_gc.h"
+ #include "rrzc_terminal_v2.h"
+ #include <chrono>
+ #include "util/coding.h"
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -250,7 +250,13 @@
+           shadow_round,current.candidate.zone,current.candidate.valid,current.candidate.capacity,current.safe,
+           current.cost.risk_known,current.cost.eta,current.cost.retained,probability,current.cost.credit,space);
+     }
+-    const auto plan=rrzc_deadline::Select(inputs,need);
++    // 此处已由外部GC触发进入；只修正全块模型，不修改Greedy或旧实验路径。
++    const auto selection_need=all_blocks_enabled && !pair_greedy ?
++        rrzc_triggered_gc::NeedForSelection(need,true) : need;
++    if(all_blocks_enabled && !pair_greedy)
++      Info(logger_,"触发后选区约束：轮次=%lu，GC已触发=1，原始缺口字节=%lu，评估需求字节=%lu，零缺口仍选区=%d",
++          shadow_round,need.bytes,selection_need.bytes,need.known && !need.bytes);
++    const auto plan=rrzc_deadline::Select(inputs,selection_need);
+     Info(logger_,"时序方案需求：轮次=%lu，可知=%d，空闲=%lu，非空闲=%lu，分配等待=%lu，目标字节=%lu，缺口字节=%lu，目标百分比=%u",
+         shadow_round,need.known,need.free,need.non_free,need.waiters,need.target,need.bytes,unsigned(GC_START_LEVEL));
+     for(const auto& p:plan.plans) {

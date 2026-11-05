@@ -1,0 +1,50 @@
+diff --git a/fs/fs_zenfs.h b/fs/fs_zenfs.h
+--- a/fs/fs_zenfs.h
++++ b/fs/fs_zenfs.h
+@@ -28 +28,2 @@
+ #include "zbd_zenfs.h"
++#include "rrzc_rr_fair_queue.h"
+@@ -152 +153,2 @@
+   bool rr_enabled_ = false;
++  rrzc_rr_fair::Queue rr_fair_queue_;
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -1347,2 +1347,27 @@
++  const bool fair_rr=getenv("ZENFS_RR_FAIR_QUEUE") && !strcmp(getenv("ZENFS_RR_FAIR_QUEUE"),"1");
++  if(fair_rr) {
++    if(!zbd_->IsMaintenanceDiagnosticsEnabled())
++      return IOStatus::NotSupported("RR公平队列需要现有代际诊断，不能静默退回地址顺序");
++    const auto now_ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count());
++    for(const auto& observed:snapshot.zones_) {
++      const auto p=std::find_if(pressure.zones.begin(),pressure.zones.end(),
++          [&](const ZoneReadPressure& row){return row.start==observed.start;});
++      auto* live=zbd_->GetIOZone(observed.start);
++      const auto state=live ? live->GetResetState() : ZoneResetState{};
++      const bool known=live && p!=pressure.zones.end() && diagnostic_before.count(observed.start) &&
++          diagnostic_after.count(observed.start) && IsMaintenanceWindowStable(
++          diagnostic_before.at(observed.start),diagnostic_after.at(observed.start),state);
++      const bool active=p!=pressure.zones.end() && observed.used_capacity &&
++          p->blocks_at_threshold && p->max_block_reads>=pressure.read_threshold;
++      rr_fair_queue_.Observe(observed.start,known,state.generation,state.sequence,active,now_ns);
++    }
++    std::stable_sort(pressure.zones.begin(),pressure.zones.end(),
++        [&](const ZoneReadPressure& a,const ZoneReadPressure& b) {
++          return rr_fair_queue_.Before(a.start,b.start);
++        });
++    Info(logger_,"RR公平队列配置：启用=1，每轮最多维护=1，原阈值=%lu，未改变检查周期=1",
++        pressure.read_threshold);
++  }
+   for (const auto& zone_pressure : pressure.zones) {
+     if (zone_pressure.blocks_at_threshold == 0) continue;
+@@ -1413,2 +1438,9 @@
++    if(fair_rr) {
++      const auto first_ns=rr_fair_queue_.First(zone_it->start);
++      const auto now_ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++          std::chrono::steady_clock::now().time_since_epoch()).count());
++      Info(logger_,"RR公平队列服务：Zone=%lu，首次超阈值纳秒=%lu，服务时点纳秒=%lu，等待纳秒=%lu",
++          zone_it->start,first_ns,now_ns,first_ns<=now_ns ? now_ns-first_ns : 0);
++    }
+     Info(logger_, "RR 开始：Zone %lu，达阈值物理块 %u，有效数据 %lu 字节，封闭剩余容量 %lu 字节",
+          zone_it->start, zone_pressure.blocks_at_threshold,

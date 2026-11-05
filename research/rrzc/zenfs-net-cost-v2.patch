@@ -1,0 +1,45 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -40,6 +40,7 @@
+ #include "rrzc_recent_sampler.h"
+ #include "rrzc_pair_rate.h"
+ #include "rrzc_retention_selector.h"
++#include "rrzc_net_cost_selector.h"
+ #include "rrzc_reserve_target.h"
+ #include "rrzc_single_recovery.h"
+ #include "rrzc_reserve_exchange.h"
+@@ -497,6 +498,12 @@
+       (!strcmp(retention_request,"observe") || !strcmp(retention_request,"execute"));
+   const bool retention_execute=retention_enabled && guarded.execute && !cost_rank &&
+       !strcmp(retention_request,"execute");
++  // V2必须显式选择；与旧留存执行及成本排序互斥，不改变默认或旧入口。
++  const auto net_cost_mode=rrzc_net_cost::Parse(getenv("ZENFS_RRZC_NET_COST_MODE"),
++      retention_enabled,guarded.execute,retention_execute,cost_rank,tail_ablation.requested);
++  if (getenv("ZENFS_RRZC_NET_COST_MODE"))
++    Info(logger_,"净成本V2配置：观察=%d，执行=%d，时间偏好=十秒内线性折扣，非概率，原资格和尾部复核不变",
++         net_cost_mode!=rrzc_net_cost::Mode::Off,net_cost_mode==rrzc_net_cost::Mode::Execute);
+   rrzc_retention::Store retention_history;
+   Info(logger_,"留存收益配置：采样=%d，执行=%d，外推秒=10，窗口秒=10/30，未知回退Greedy，原RR和GC条件不变",
+        retention_enabled,retention_execute);
+@@ -980,6 +987,20 @@
+                    shadow_round,retention_execute,proposal.proposed_zone,retained.proposed_zone,
+                    retained.would_switch,retained.extra_valid,retained.predicted_ns,retained.reason);
+               if (retention_execute) proposal=retained;
++              if (net_cost_mode!=rrzc_net_cost::Mode::Off) {
++                const auto net=rrzc_net_cost::Evaluate(candidates,usable,growth.evidence,forecasts,
++                    recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++                for (const auto& item:net.costs) {
++                  const auto& c=item.second;
++                  Info(logger_,"净成本V2候选：轮次=%lu，Zone=%lu，可知=%d，ETA纳秒=%lu，预计保留字节=%lu，折扣抵扣字节=%lu，净复制字节=%lu，回收字节=%lu，原因=%s",
++                       shadow_round,item.first,c.known,c.eta_ns,c.retained,c.credit,c.net_copy,c.reclaimed,c.reason);
++                }
++                const auto& d=net.decision;
++                Info(logger_,"净成本V2建议：轮次=%lu，执行=%d，GreedyZone=%lu，建议Zone=%lu，会改选=%d，额外字节=%lu，预测纳秒=%lu，原因=%s",
++                     shadow_round,net_cost_mode==rrzc_net_cost::Mode::Execute,d.greedy.selected.zone,
++                     d.proposed_zone,d.would_switch,d.extra_valid,d.predicted_ns,d.reason);
++                proposal=rrzc_net_cost::Apply(net_cost_mode,proposal,net);
++              }
+             }
+             std::map<uint64_t,rrzc_guard::Bounds> bounds;
+             for (const auto& c:candidates) {

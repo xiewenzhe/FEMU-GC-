@@ -1,0 +1,29 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -52,1 +52,2 @@
+ #include "rrzc_exact_live.h"
++#include "rrzc_candidate_pool.h"
+@@ -531,1 +532,7 @@
+   // 新模型默认关闭；配置冲突有独立错误证据，不能把旧分支伪称新模型。
++  const auto candidate_pool=rrzc_pool::Parse(getenv("ZENFS_RRZC_CANDIDATE_POOL"),direct_enabled);
++  Info(logger_,"候选范围配置：版本=1，合法=%d，扩大=%d，GC启动不变=1，满区要求不变=1，正回收要求不变=1，公共安全不变=1，评分公式不变=1",
++       candidate_pool.valid,candidate_pool.expanded);
++  if(!candidate_pool.valid) {
++    Error(logger_,"候选范围配置非法：只接受original或直接选区入口的expanded，停止实验维护线程");return;
++  }
+@@ -535,2 +542,2 @@
+-    Info(logger_,"窗口收益配置：请求=1，启用=%d，版本=1，最大支撑窗口=%lu，先选Greedy=0，原候选资格不变=1",
+-        window_credit,10*rrzc_v1::kSecond);
++    Info(logger_,"窗口收益配置：请求=1，启用=%d，版本=1，最大支撑窗口=%lu，先选Greedy=0，原候选资格不变=%d",
++         window_credit,10*rrzc_v1::kSecond,!candidate_pool.expanded);
+@@ -741,2 +748,7 @@
+-        bool selected = rrzc_exact::Selected(zone.used_capacity,zone.max_capacity,
+-            garbage_percent_approx,threshold,exact_live_enabled);
++        const bool original_selected=rrzc_exact::Selected(zone.used_capacity,zone.max_capacity,
++            garbage_percent_approx,threshold,exact_live_enabled);
++        bool selected=rrzc_pool::Selected(zone.used_capacity,zone.max_capacity,
++            garbage_percent_approx,threshold,exact_live_enabled,candidate_pool.expanded);
++        Info(logger_,"候选范围资格：Zone=%lu，有效字节=%lu，容量字节=%lu，无效比例=%lu，原比例门槛=%lu，原比例资格=%d，扩大=%d，实际比例资格=%d，满区=1",
++             zone.start,zone.used_capacity,zone.max_capacity,garbage_percent_approx,threshold,
++             original_selected,candidate_pool.expanded,selected);

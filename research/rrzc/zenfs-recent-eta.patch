@@ -1,0 +1,63 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -44 +44,2 @@
+ #include "rrzc_direct_selector.h"
++#include "rrzc_recent_eta_selector.h"
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -17 +17,35 @@
+-  auto ranked=rrzc_direct::Rank(candidates,usable,forecasts,recent.threshold,simple_budget,shadow_horizon);
++  const bool recent_eta=getenv("ZENFS_RRZC_RECENT_ETA") && !strcmp(getenv("ZENFS_RRZC_RECENT_ETA"),"1");
++  auto ranked=recent_eta ? rrzc_recent_eta::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
++      rrzc_direct::Rank(candidates,usable,forecasts,recent.threshold,simple_budget,shadow_horizon);
++  // 两臂统一记录同一冻结历史；不把观测开关当作执行开关，不发送额外设备读取。
++  if(getenv("ZENFS_RRZC_ETA_OBSERVE") && !strcmp(getenv("ZENFS_RRZC_ETA_OBSERVE"),"1")) {
++    for(const auto& c:candidates) {
++      const auto b=usable.find(c.zone);if(b==usable.end())continue;
++      const auto& block=b->second;
++      const auto f=forecasts.find(c.zone);
++      const auto* forecast=f==forecasts.end()?nullptr:&f->second;
++      rrzc_v1::GrowthEvidence evidence;
++      const auto revised=rrzc_recent_eta::Estimate(c,&block,forecast,recent,growth_history,shadow_horizon,&evidence);
++      const auto old=rrzc_direct::Estimate(c,&block,forecast,recent.threshold,shadow_horizon);
++      const auto& p=evidence.previous;
++      Info(logger_,"近期ETA对照：轮次=%lu，Zone=%lu，新策略=%d，会话=%lu/%lu，代际=%lu，块=%u，PPA=%u/%u/%u/%u，快照=%lu，RC=%lu，十秒增量=%lu，起点=%lu，前会话=%lu/%lu，前代际=%lu，前块=%u，前PPA=%u/%u/%u/%u，前快照=%lu，前RC=%lu，前起点=%lu，近期可知=%d，近期增量=%lu，间隔=%lu，阈值=%lu，原ETA=%lu，新ETA=%lu，原抵扣=%lu，新抵扣=%lu，原因=%s",
++          shadow_round,c.zone,recent_eta,recent.session_hi,recent.session_lo,block.generation,block.block_id,
++          block.ch,block.lun,block.plane,block.block,block.snapshot_ns,block.rc,block.delta10,block.epoch_start_ns,
++          evidence.previous_session_hi,evidence.previous_session_lo,p.generation,p.block_id,
++          p.ch,p.lun,p.plane,p.block,p.snapshot_ns,p.rc,p.epoch_start_ns,evidence.known,evidence.delta,evidence.interval_ns,
++          recent.threshold,old.eta,revised.eta,old.credit,revised.credit,evidence.reason);
++    }
++    // 只输出已存在的修改时间/寿命提示，修改龄不等于文件真实年龄或剩余寿命。
++    const auto now=time(0);
++    for(const auto& file:snapshot.zone_files_) {
++      uint64_t candidate_bytes=0;
++      for(const auto& ext:file.extents)for(const auto& c:candidates)
++        if(ext.zone_start==c.zone)candidate_bytes+=ext.length;
++      if(!candidate_bytes)continue;
++      const bool known=file.modification_time>0 && now>=file.modification_time;
++      Info(logger_,"文件时间信号：轮次=%lu，文件编号=%lu，文件名=%s，候选有效=%lu，观测秒=%lu，修改秒=%lu，修改龄可知=%d，修改龄秒=%lu，寿命提示=%u，未来失效时刻未知=1",
++          shadow_round,file.file_id,file.filename.c_str(),candidate_bytes,uint64_t(now),
++          uint64_t(file.modification_time),known,known?uint64_t(now-file.modification_time):0U,
++          unsigned(file.lifetime_hint));
++    }
++  }
+diff --git a/fs/snapshot.h b/fs/snapshot.h
+--- a/fs/snapshot.h
++++ b/fs/snapshot.h
+@@ -85,7 +85,12 @@ class ZoneFileSnapshot {
+   uint64_t file_id;
+   std::string filename;
+   std::vector<ZoneExtentSnapshot> extents;
++  // 内存只读信号，不改变盘上格式，不作为剩余寿命。
++  time_t modification_time;
++  Env::WriteLifeTimeHint lifetime_hint;
+ 
+  public:
+   ZoneFileSnapshot(ZoneFile& file)
+-      : file_id(file.GetID()), filename(file.GetFilename()) {
++      : file_id(file.GetID()), filename(file.GetFilename()),
++        modification_time(file.GetFileModificationTime()),
++        lifetime_hint(file.GetWriteLifeTimeHint()) {

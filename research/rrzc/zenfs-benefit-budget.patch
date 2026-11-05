@@ -1,0 +1,74 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -40,6 +40,7 @@
+ #include "rrzc_recent_sampler.h"
+ #include "rrzc_pair_rate.h"
+ #include "rrzc_retention_selector.h"
++#include "rrzc_benefit_budget.h"
+ #include "rrzc_reserve_target.h"
+ #include "rrzc_single_recovery.h"
+ #include "rrzc_reserve_exchange.h"
+@@ -497,6 +498,13 @@
+       (!strcmp(retention_request,"observe") || !strcmp(retention_request,"execute"));
+   const bool retention_execute=retention_enabled && guarded.execute && !cost_rank &&
+       !strcmp(retention_request,"execute");
++  const auto benefit_mode=rrzc_benefit_budget::Parse(getenv("ZENFS_RRZC_BENEFIT_BUDGET_MODE"),
++      retention_enabled,guarded.execute,retention_execute,cost_rank,tail_ablation.requested,
++      getenv("ZENFS_RRZC_NET_COST_MODE")!=nullptr);
++  if (getenv("ZENFS_RRZC_BENEFIT_BUDGET_MODE"))
++    Info(logger_,"收益预算配置：观察=%d，执行=%d，默认关闭，复用V2预测，净收益决定额外搬运，原回收资格及实时复核不变",
++         benefit_mode!=rrzc_benefit_budget::Mode::Off,
++         benefit_mode==rrzc_benefit_budget::Mode::Execute);
+   rrzc_retention::Store retention_history;
+   Info(logger_,"留存收益配置：采样=%d，执行=%d，外推秒=10，窗口秒=10/30，未知回退Greedy，原RR和GC条件不变",
+        retention_enabled,retention_execute);
+@@ -959,6 +967,7 @@
+                  shadow_round,cost_rank,eta_proposal.proposed_zone,proposal.proposed_zone,
+                  eta_proposal.proposed_zone!=proposal.proposed_zone,eta_proposal.predicted_ns,
+                  proposal.predicted_ns,eta_proposal.extra_valid,proposal.extra_valid);
++            uint64_t execution_budget=shadow_extra_budget;
+             if (retention_enabled) {
+               std::map<uint64_t,rrzc_retention::Forecast> forecasts;
+               for (const auto& c:candidates) {
+@@ -980,6 +989,22 @@
+                    shadow_round,retention_execute,proposal.proposed_zone,retained.proposed_zone,
+                    retained.would_switch,retained.extra_valid,retained.predicted_ns,retained.reason);
+               if (retention_execute) proposal=retained;
++              if (benefit_mode!=rrzc_benefit_budget::Mode::Off) {
++                const auto benefit=rrzc_benefit_budget::Evaluate(candidates,usable,growth.evidence,forecasts,
++                    recent.threshold,simple_budget,shadow_horizon,shadow_extra_budget);
++                for (const auto& item:benefit.net.costs) {
++                  const auto& c=item.second;
++                  Info(logger_,"收益预算候选：轮次=%lu，Zone=%lu，可知=%d，ETA纳秒=%lu，预计保留字节=%lu，折扣抵扣字节=%lu，净复制字节=%lu，回收字节=%lu，原因=%s",
++                       shadow_round,item.first,c.known,c.eta_ns,c.retained,c.credit,c.net_copy,c.reclaimed,c.reason);
++                }
++                const auto& d=benefit.net.decision;
++                Info(logger_,"收益预算建议：轮次=%lu，执行=%d，GreedyZone=%lu，建议Zone=%lu，会改选=%d，额外字节=%lu，预测纳秒=%lu，原预算字节=%lu，执行预算字节=%lu，合格集合额外上界=%lu，原因=%s",
++                     shadow_round,benefit_mode==rrzc_benefit_budget::Mode::Execute,d.greedy.selected.zone,
++                     d.proposed_zone,d.would_switch,d.extra_valid,d.predicted_ns,shadow_extra_budget,
++                     benefit.guard_budget,benefit.eligible_extra_upper,d.reason);
++                proposal=d;
++                execution_budget=benefit.guard_budget;
++              }
+             }
+             std::map<uint64_t,rrzc_guard::Bounds> bounds;
+             for (const auto& c:candidates) {
+@@ -1017,7 +1042,7 @@
+             const auto rechecked=zbd_->GetMigrationReserveObservation();
+             const bool target_stable=rrzc_guard::StableReserve(target,rechecked);
+             const auto execution=rrzc_guard::Apply(decision,proposal,candidates,
+-                simple_budget,shadow_extra_budget,tail,target,rechecked,[&](const rrzc_simple::Candidate& c) {
++                simple_budget,execution_budget,tail,target,rechecked,[&](const rrzc_simple::Candidate& c) {
+                   Zone* live=zbd_->GetIOZone(c.zone);
+                   const auto first=diagnostic_before.find(c.zone);
+                   const auto last=recent_after.find(c.zone);
+@@ -1056,7 +1081,7 @@
+                  proposal.greedy.found ? proposal.greedy.selected.zone : 0,proposal.proposed_zone,
+                  proposal.would_switch,tail.allow,tail.category,tail.reason,execution.switched,
+                  v1_actual_zone,v1_switched,proposal.extra_valid,v1_extra_valid,proposal.predicted_ns,
+-                 shadow_horizon,shadow_extra_budget,frame_ok,query_ns,execution.reason);
++                 shadow_horizon,execution_budget,frame_ok,query_ns,execution.reason);
+           }
+           if (short_enabled) {
+             // 新建议仅写日志，不赋给shadow或实际decision，也不调用真实ApplyDecision。

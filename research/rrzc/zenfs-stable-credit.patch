@@ -1,0 +1,29 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -45 +45,2 @@
+ #include "rrzc_recent_eta_selector.h"
++#include "rrzc_stable_credit_selector.h"
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -14,2 +14,17 @@
+-  auto ranked=recent_eta ? rrzc_recent_eta::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
+-      rrzc_direct::Rank(candidates,usable,forecasts,recent.threshold,simple_budget,shadow_horizon);
++  const bool stable_credit=getenv("ZENFS_RRZC_STABLE_CREDIT") && !strcmp(getenv("ZENFS_RRZC_STABLE_CREDIT"),"1");
++  auto ranked=stable_credit ? rrzc_stable_credit::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
++      recent_eta ? rrzc_recent_eta::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
++      rrzc_direct::Rank(candidates,usable,forecasts,recent.threshold,simple_budget,shadow_horizon);
++  if(stable_credit) {
++    Info(logger_,"稳定收益模式：轮次=%lu，执行=1，版本=1，时间尺度=%lu，先选Greedy=0",
++        shadow_round,shadow_horizon);
++    for(const auto& c:candidates) {
++      const auto b=usable.find(c.zone);const auto f=forecasts.find(c.zone);
++      rrzc_stable_credit::Evidence proof;
++      const auto cost=rrzc_stable_credit::Estimate(c,b==usable.end()?nullptr:&b->second,
++          f==forecasts.end()?nullptr:&f->second,recent,growth_history,shadow_horizon,&proof);
++      Info(logger_,"稳定收益成本：轮次=%lu，Zone=%lu，风险可知=%d，短窗ETA=%lu，十秒ETA=%lu，稳定ETA=%lu，预计留存=%lu，RR抵扣=%lu，净复制=%lu，原因=%s",
++          shadow_round,c.zone,cost.risk_known,proof.short_eta,proof.average_eta,cost.eta,
++          cost.retained,cost.credit,cost.net,proof.reason);
++    }
++  }

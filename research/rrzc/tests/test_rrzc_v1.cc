@@ -103,7 +103,8 @@ int main() {
   CHECK(!Evaluate(candidates,recent,4096,192*mib,0,16*mib).would_switch);
   CHECK(!Evaluate(candidates,recent,4096,192*mib,301*kSecond,16*mib).would_switch);
   CHECK(!Evaluate(candidates,recent,4096,192*mib,10*kSecond,15*mib).would_switch);
-  CHECK(!Evaluate(candidates,recent,4096,0,10*kSecond,16*mib).greedy.found);
+  // 当前零回收预算表示取消额外固定门槛，不再表示禁用候选。
+  CHECK(Evaluate(candidates,recent,4096,0,10*kSecond,16*mib).greedy.found);
   CHECK(!Evaluate({},recent,4096,192*mib,10*kSecond,16*mib).greedy.found);
   candidates[2].valid=32*mib; recent[3]=hot;
   CHECK(evaluate().proposed_zone==2);

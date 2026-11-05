@@ -19,7 +19,10 @@ int main() {
   Check(Choose({cold, hot}, 128, false).selected.zone == 10);
   Check(Choose({cold, hot}, 192, true).selected.zone == 10);
   Check(!Choose({cold, hot}, 193, true).found);
-  Check(!Choose({cold, hot}, 0, true).found);
+  Check(Choose({cold, hot}, 0, true).found);
+  Check(Eligible(hot, 0));
+  hot.valid = 256; Check(!Eligible(hot, 0));
+  hot.valid = 128;
   hot.valid = 64; hot.pressure_available = false;
   d = Choose({cold, hot}, 192, true);
   Check(d.selected.zone == 10 && !d.used_weighted);

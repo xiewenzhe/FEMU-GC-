@@ -1,0 +1,7 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -400 +400,2 @@
+-      simple_enabled = errno == 0 && end && *end == '\0' && simple_budget > 0;
++      // 零表示取消额外固定回收门槛；原GC资格和迁移安全检查不变。
++      simple_enabled = errno == 0 && end && *end == '\0';

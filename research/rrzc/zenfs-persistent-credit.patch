@@ -1,0 +1,36 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -47 +47,2 @@
+ #include "rrzc_window_credit_selector.h"
++#include "rrzc_persistent_credit_selector.h"
+@@ -536,0 +538,8 @@
++  const bool persistent_requested=getenv("ZENFS_RRZC_PERSISTENT_CREDIT") &&
++      !strcmp(getenv("ZENFS_RRZC_PERSISTENT_CREDIT"),"1");
++  const bool persistent_credit=persistent_requested && window_credit;
++  if(persistent_requested) {
++    Info(logger_,"持续读收益配置：请求=1，启用=%d，版本=1，短间隔最小=%lu，短间隔最大=%lu，原窗口留存不变=1，先选Greedy=0",
++        persistent_credit,rrzc_v1::kGrowthMinNs,rrzc_v1::kGrowthMaxNs);
++    if(!persistent_credit) Error(logger_,"持续读收益配置冲突：须独立启用窗口模型，不能混用其他执行分支");
++  }
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -32,2 +32,12 @@
+-      const auto cost=rrzc_window_credit::Estimate(c,b==usable.end()?nullptr:&b->second,
+-          &f,recent.threshold,shadow_horizon,&proof);
++      rrzc_persistent_credit::Evidence persistence;
++      const auto cost=persistent_credit ? rrzc_persistent_credit::Estimate(c,
++          b==usable.end()?nullptr:&b->second,&f,recent,growth_history,shadow_horizon,&persistence) :
++          rrzc_window_credit::Estimate(c,b==usable.end()?nullptr:&b->second,
++              &f,recent.threshold,shadow_horizon,&proof);
++      if(persistent_credit) {
++        proof=persistence.window;proof.reason=persistence.reason;
++        Info(logger_,"持续读收益成本：轮次=%lu，Zone=%lu，版本=1，平均ETA=%lu，近期ETA=%lu，修正ETA=%lu，近期可知=%d，近期增量=%lu，近期间隔=%lu，原抵扣=%lu，修正抵扣=%lu，原因=%s",
++            shadow_round,c.zone,persistence.average_eta,persistence.recent_eta,cost.eta,
++            persistence.growth.known,persistence.growth.delta,persistence.growth.interval_ns,
++            persistence.original_credit,cost.credit,persistence.reason);
++      }
+@@ -40 +50,2 @@
+   auto ranked=pair_greedy ? rrzc_direct::Rank(candidates,{}, {},recent.threshold,simple_budget,shadow_horizon) :
++      persistent_credit ? rrzc_persistent_credit::Rank(candidates,usable,window_forecasts,recent,growth_history,simple_budget,shadow_horizon) :

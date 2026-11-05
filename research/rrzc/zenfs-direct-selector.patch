@@ -1,0 +1,56 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -43,2 +43,3 @@
+ #include "rrzc_benefit_budget.h"
++#include "rrzc_direct_selector.h"
+ #include "rrzc_reserve_target.h"
+@@ -398,3 +399,4 @@
+       simple_budget = strtoull(value, &end, 10);
+-      simple_enabled = errno == 0 && end && *end == '\0' && simple_budget > 0;
++      // 零表示取消额外固定回收门槛，原GC资格及迁移安全检查仍保留。
++      simple_enabled = errno == 0 && end && *end == '\0';
+     } else simple_enabled = false;
+@@ -508,2 +509,12 @@
+   rrzc_retention::Store retention_history;
++  const bool direct_enabled=getenv("ZENFS_RRZC_DIRECT") && !strcmp(getenv("ZENFS_RRZC_DIRECT"),"1") &&
++      guarded.observe && !guarded.execute && retention_enabled && !retention_execute && !cost_rank &&
++      !tail_ablation.requested && benefit_mode==rrzc_benefit_budget::Mode::Off &&
++      !getenv("ZENFS_RRZC_BENEFIT_BUDGET_MODE") && !getenv("ZENFS_RRZC_NET_COST_MODE");
++  if (getenv("ZENFS_RRZC_DIRECT"))
++    Info(logger_,"统一选区配置：启用=%d，直接排序=1，时间折扣=0，相对预算=0，RR界限秒=10，RC速率窗口秒=10，旧选择器不执行",
++         direct_enabled);
++  if (getenv("ZENFS_RRZC_DIRECT") && !direct_enabled)
++    Error(logger_,"统一选区配置冲突，拒绝将旧策略伪称为新策略");
++
+   Info(logger_,"留存收益配置：采样=%d，执行=%d，外推秒=10，窗口秒=10/30，未知回退Greedy，原RR和GC条件不变",
+@@ -802,3 +813,6 @@
+-      auto decision = rrzc_simple::Choose(candidates, simple_budget, simple_weighted,
+-                                                simple_space_weight);
++      rrzc_simple::Decision decision;
++      if (!direct_enabled)
++        decision=rrzc_simple::Choose(candidates,simple_budget,simple_weighted,simple_space_weight);
++      const bool direct_has_normal=direct_enabled && std::any_of(candidates.begin(),candidates.end(),
++          [&](const rrzc_simple::Candidate& c){return rrzc_simple::Eligible(c,simple_budget);});
+       bool recovery_round=false;
+@@ -805,1 +820,1 @@
+-      if (single_recovery_enabled && !decision.found) {
++      if (single_recovery_enabled && !decision.found && !direct_has_normal) {
+@@ -813,1 +828,1 @@
+-      if (space_waiters && !decision.found) {
++      if (space_waiters && !decision.found && !direct_has_normal) {
+@@ -933,4 +948,6 @@
+-        auto shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
+-            simple_budget,shadow_horizon,shadow_extra_budget);
+-        if (growth_enabled) {
++        rrzc_v1::ShadowDecision shadow;
++        if (!direct_enabled)
++          shadow=rrzc_v1::Evaluate(candidates,usable,recent.threshold,
++              simple_budget,shadow_horizon,shadow_extra_budget);
++        if (growth_enabled && !direct_enabled) {
+           if (!frame_ok) {
+@@ -1122,1 +1139,4 @@
++        if (direct_enabled) {
++#include "rrzc_direct_zenfs.inc"
++        }
+         if (!real_enabled && !guarded.observe)

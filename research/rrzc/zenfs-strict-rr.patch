@@ -1,0 +1,190 @@
+diff --git a/fs/zbd_zenfs.h b/fs/zbd_zenfs.h
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -24,6 +24,8 @@
+ #include <string>
+ #include <utility>
+ #include <vector>
++#include <functional>
++#include "rrzc_strict_io.h"
+ 
+ #include "metrics.h"
+ #include "rrzc_recent_log.h"
+@@ -216,6 +218,8 @@
+   bool maintenance_diag_enabled_ = false;
+   bool allocation_fallback_enabled_ = false;
+   bool migration_reserve_enabled_ = false;
++  std::recursive_mutex strict_io_mutex_;
++  std::function<IOStatus()> strict_rr_handler_;
+   // 专用迁移区始终持有 busy 标志，不占普通 IO 的令牌；使用已有预留配额。
+   std::mutex migration_reserve_mtx_;
+   Zone *migration_reserve_zone_ = nullptr;
+@@ -236,6 +240,20 @@
+ 
+   IOStatus Open(bool readonly, bool exclusive);
+ 
++  bool StrictRR() const {
++    const char* value=getenv("ZENFS_RR_STRICT");
++    return value && !strcmp(value,"1");
++  }
++  std::unique_lock<std::recursive_mutex> StrictLock() {
++    return StrictRR() ? std::unique_lock<std::recursive_mutex>(strict_io_mutex_) :
++        std::unique_lock<std::recursive_mutex>();
++  }
++  void SetStrictRRHandler(std::function<IOStatus()> handler) {strict_rr_handler_=std::move(handler);}
++  IOStatus ServiceStrictRR() {
++    return strict_rr_handler_ ? strict_rr_handler_() :
++        IOStatus::IOError("严格RR尚未安装主机维护回调，拒绝继续读取");
++  }
++
+   Zone *GetIOZone(uint64_t offset);
+ 
+   IOStatus AllocateIOZone(Env::WriteLifeTimeHint file_lifetime, IOType io_type,
+diff --git a/fs/zbdlib_zenfs.cc b/fs/zbdlib_zenfs.cc
+--- a/fs/zbdlib_zenfs.cc
++++ b/fs/zbdlib_zenfs.cc
+@@ -301,6 +301,38 @@
+ }
+ 
+ int ZbdlibBackend::Read(char *buf, int size, uint64_t pos, bool direct) {
++  const char* strict=getenv("ZENFS_RR_STRICT");
++  if(strict && !strcmp(strict,"1")) {
++    if(size<=0) return size;
++    const int nsid=ioctl(read_f_,NVME_IOCTL_ID);
++    if(nsid<=0) {errno=ENOTSUP;return -1;}
++    alignas(4096) char page[4096];
++    int done=0;
++    while(done<size) {
++      const uint64_t current=pos+done;
++      const uint64_t aligned=current & ~uint64_t(4095);
++      nvme_passthru_cmd cmd={};
++      cmd.opcode=0xc2;cmd.nsid=nsid;
++      cmd.addr=reinterpret_cast<uint64_t>(page);cmd.data_len=sizeof(page);
++      const uint64_t lba=aligned/512;
++      cmd.cdw10=uint32_t(lba);cmd.cdw11=uint32_t(lba>>32);cmd.cdw12=7;
++      cmd.cdw13=0x52520000u | unsigned(rrzc_strict::migration);
++      const int status=ioctl(read_f_,NVME_IOCTL_IO_CMD,&cmd);
++      if(status<0)return -1;
++      if(status) {
++        if((status & 0x7ff)==0x7f0) {rrzc_strict::reached=true;errno=EAGAIN;}
++        else errno=EIO;
++        return -1;
++      }
++      // 达阈值的本页真实读取已计数；普通读取在锁外维护后按新映射重试。
++      if(cmd.result && !rrzc_strict::migration) {
++        rrzc_strict::reached=true;errno=EAGAIN;return -1;
++      }
++      const int take=std::min<int>(size-done,4096-(current-aligned));
++      memcpy(buf+done,page+(current-aligned),take);done+=take;
++    }
++    return done;
++  }
+   return pread(direct ? read_direct_f_ : read_f_, buf, size, pos);
+ }
+ 
+diff --git a/fs/io_zenfs.h b/fs/io_zenfs.h
+--- a/fs/io_zenfs.h
++++ b/fs/io_zenfs.h
+@@ -115,6 +115,8 @@
+ 
+   IOStatus PositionedRead(uint64_t offset, size_t n, Slice* result,
+                           char* scratch, bool direct);
++  IOStatus PositionedReadOnce(uint64_t offset, size_t n, Slice* result,
++                              char* scratch, bool direct);
+   ZoneExtent* GetExtent(uint64_t file_offset, uint64_t* dev_offset);
+   void PushExtent();
+   IOStatus AllocateNewZone();
+diff --git a/fs/io_zenfs.cc b/fs/io_zenfs.cc
+--- a/fs/io_zenfs.cc
++++ b/fs/io_zenfs.cc
+@@ -369,6 +369,20 @@
+ 
+ IOStatus ZoneFile::PositionedRead(uint64_t offset, size_t n, Slice* result,
+                                   char* scratch, bool direct) {
++  auto strict_lock=zbd_->StrictLock();
++  for(unsigned retry=0;retry<32;++retry) {
++    rrzc_strict::reached=false;
++    const auto status=PositionedReadOnce(offset,n,result,scratch,direct);
++    if(!zbd_->StrictRR() || !rrzc_strict::reached) return status;
++    // Once已销毁ReadLock；迁移更新映射不会等待当前读取自身。
++    const auto refresh=zbd_->ServiceStrictRR();
++    if(!refresh.ok()) return refresh;
++  }
++  return IOStatus::IOError("严格RR读取重试超过上限，停止而非越过阈值");
++}
++
++IOStatus ZoneFile::PositionedReadOnce(uint64_t offset, size_t n, Slice* result,
++                                      char* scratch, bool direct) {
+   ZenFSMetricsLatencyGuard guard(zbd_->GetMetrics(), ZENFS_READ_LATENCY,
+                                  Env::Default());
+   zbd_->GetMetrics()->ReportQPS(ZENFS_READ_QPS, 1);
+@@ -1081,6 +1095,7 @@
+ 
+ IOStatus ZoneFile::MigrateData(uint64_t offset, uint32_t length,
+                                Zone* target_zone) {
++  rrzc_strict::MigrationScope migration_scope;
+   uint32_t step = 128 << 10;
+   uint32_t read_sz = step;
+   int block_sz = zbd_->GetBlockSize();
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -385,6 +385,7 @@
+     run_gc_worker_ = false;
+     gc_worker_->join();
+   }
++  zbd_->SetStrictRRHandler({});
+ 
+   meta_log_.reset(nullptr);
+   ClearFiles();
+@@ -659,6 +660,7 @@
+     }
+ 
+     if (!run_gc_worker_) break;
++    auto strict_lock=zbd_->StrictLock();
+     if (rr_enabled_) {
+       IOStatus rr_status = ReadReclaimOneZone();
+       if (!rr_status.ok()) {
+@@ -2695,6 +2697,32 @@
+   Info(logger_, "Finish threshold %u", superblock_->GetFinishTreshold());
+   Info(logger_, "Filesystem mount OK");
+ 
++  if(zbd_->StrictRR()) {
++    if(readonly) return Status::NotSupported("严格RR挂载需要可写维护能力；数据库可只读但文件系统须可维护");
++    zbd_->SetStrictRRHandler([this]() {
++      Info(logger_,"严格RR同步服务：开始=1，普通读取暂停=1，自身刷新豁免=1，其他块迁移计数=1");
++      for(unsigned retry=0;retry<64;++retry) {
++        ZoneReadPressureReport pressure;
++        auto status=zbd_->GetZoneReadPressure(&pressure);
++        if(!status.ok())return status;
++        bool pending=false;
++        for(const auto& p:pressure.zones) {
++          const auto* zone=zbd_->GetIOZone(p.start);
++          if(zone && zone->used_capacity_ && p.blocks_at_threshold) pending=true;
++        }
++        if(!pending) {
++          Info(logger_,"严格RR同步服务：完成=1，普通读取恢复=1");
++          return IOStatus::OK();
++        }
++        status=ReadReclaimOneZone();
++        if(!status.ok())return status;
++        std::this_thread::sleep_for(std::chrono::milliseconds(1));
++      }
++      return IOStatus::IOError("严格RR无法安全维护到期源，拒绝继续普通读取");
++    });
++    Info(logger_,"严格RR主机配置：启用=1，阈值完成立即同步服务=1，先释放文件读锁=1，旧GC周期不变=1");
++  }
++
+   if (!readonly) {
+     Info(logger_, "Resetting unused IO Zones..");
+     IOStatus status = zbd_->ResetUnusedIOZones();
+@@ -2703,7 +2731,8 @@
+ 
+     const char* rr_env = getenv("ZENFS_RR_ENABLE");
+     rr_enabled_ = rr_env != nullptr && strcmp(rr_env, "1") == 0;
+-    if (superblock_->IsGCEnabled() || rr_enabled_) {
++    if ((superblock_->IsGCEnabled() || rr_enabled_) &&
++        !(zbd_->StrictRR() && getenv("ZENFS_RR_STRICT_AUDIT"))) {
+       Info(logger_, "启动 Zone 维护线程：GC=%d，主机端 RR=%d",
+            superblock_->IsGCEnabled(), rr_enabled_);
+       run_gc_worker_ = true;

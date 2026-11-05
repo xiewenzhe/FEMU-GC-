@@ -1,0 +1,68 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -46 +46,2 @@
+ #include "rrzc_stable_credit_selector.h"
++#include "rrzc_window_credit_selector.h"
+@@ -512 +513,4 @@
+   rrzc_retention::Store retention_history;
++  rrzc_window_credit::Store window_history;
++  const bool window_requested=getenv("ZENFS_RRZC_WINDOW_CREDIT") &&
++      !strcmp(getenv("ZENFS_RRZC_WINDOW_CREDIT"),"1");
+@@ -521,0 +526,11 @@
++  // 新模型默认关闭；配置冲突有独立错误证据，不能把旧分支伪称新模型。
++  const bool window_credit=window_requested && direct_enabled && independent_sampling &&
++      migration_window_.Enabled() &&
++      !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
++      !(getenv("ZENFS_RRZC_STABLE_CREDIT") && !strcmp(getenv("ZENFS_RRZC_STABLE_CREDIT"),"1"));
++  if(window_requested) {
++    Info(logger_,"窗口收益配置：请求=1，启用=%d，版本=1，最大支撑窗口=%lu，先选Greedy=0，原候选资格不变=1",
++        window_credit,10*rrzc_v1::kSecond);
++    if(!window_credit) Error(logger_,"窗口收益配置冲突：需统一入口、独立采样及迁移标记，不能同时启用Greedy或稳定模型");
++  }
++
+@@ -538 +553,6 @@
++      if(window_credit) {
++        const auto sequence=window_history.Publish(frame,good);
++        Info(logger_,"窗口收益历史发布：发布序号=%lu，可用=%d，迁移后纳秒=%lu，会话=%lu/%lu",
++            sequence,good,frame.after.captured_ns,frame.session_hi,frame.session_lo);
++      }
+       retention_history.Publish(std::move(frame),good);
+@@ -868,0 +889,4 @@
++        const auto window_frozen=window_credit ? window_history.Freeze() : rrzc_window_credit::Store::Snapshot{};
++        if(window_credit)
++          Info(logger_,"窗口收益历史冻结：轮次=%lu，发布序号=%lu",shadow_round,window_frozen.sequence);
++
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -17,0 +18,22 @@
++  std::map<uint64_t,rrzc_window_credit::Retention> window_forecasts;
++  if(window_credit) {
++    for(const auto& c:candidates) {
++      const auto point=retention_current.zones.find(c.zone);
++      rrzc_window_credit::Retention f;
++      if(frame_ok && usable.count(c.zone) && point!=retention_current.zones.end() && point->second.valid==c.valid)
++        f=window_frozen.history.Check(retention_current,point->second);
++      window_forecasts.emplace(c.zone,f);
++    }
++    Info(logger_,"窗口收益模式：轮次=%lu，执行=1，版本=1，时间尺度=%lu，先选Greedy=0，历史序号=%lu",
++        shadow_round,shadow_horizon,window_frozen.sequence);
++    for(const auto& c:candidates) {
++      const auto b=usable.find(c.zone);const auto& f=window_forecasts.at(c.zone);
++      rrzc_window_credit::Evidence proof;
++      const auto cost=rrzc_window_credit::Estimate(c,b==usable.end()?nullptr:&b->second,
++          &f,recent.threshold,shadow_horizon,&proof);
++      Info(logger_,"窗口收益成本：轮次=%lu，Zone=%lu，风险可知=%d，ETA=%lu，预计留存=%lu，RR抵扣=%lu，净复制=%lu，读间隔=%lu，读增量=%lu，支撑窗口=%lu，留存可知=%d，留存Zone=%lu，留存代际=%lu，留存有效=%lu，短减少=%lu，短间隔=%lu，长减少=%lu，长间隔=%lu，原因=%s",
++          shadow_round,c.zone,cost.risk_known,cost.eta,cost.retained,cost.credit,cost.net,
++          proof.read_span,proof.read_delta,proof.window,f.known,f.zone,f.generation,f.valid,
++          f.short_loss,f.short_span,f.long_loss,f.long_span,proof.reason);
++    }
++  }
+@@ -18,2 +40,3 @@
+   auto ranked=pair_greedy ? rrzc_direct::Rank(candidates,{}, {},recent.threshold,simple_budget,shadow_horizon) :
++      window_credit ? rrzc_window_credit::Rank(candidates,usable,window_forecasts,recent.threshold,simple_budget,shadow_horizon) :
+       stable_credit ? rrzc_stable_credit::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
+@@ -120 +143 @@
+-        reserve.remaining,reserve.valid,source,row.safe,f.known,spare_ok);
++        reserve.remaining,reserve.valid,source,row.safe,window_credit ? window_forecasts.at(c.zone).known : f.known,spare_ok);

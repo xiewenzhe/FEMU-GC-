@@ -1,0 +1,45 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -54,6 +54,7 @@
+ #include "rrzc_candidate_pool.h"
+ #include "rrzc_space_plan.h"
+ #include "rrzc_deadline_selector.h"
++#include "rrzc_joint_time_selector.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -550,6 +551,12 @@ void ZenFS::GCWorker() {
+   }
+   Info(logger_,"空间方案配置：版本=%u，启用=%d，外部GC检查不变=1，按字节需求=1，预测RR空间不抵当前缺口=1，仅执行首区=1",deadline_enabled?3U:2U,space_plan);
+   Info(logger_,"时序配置：版本=1，启用=%d，下一检查最小间隔纳秒=10000000000，近期最小纳秒=2000000000，近期最大纳秒=4000000000，RR替代补充ZC=1，总成本同分再比较强制RR=1",deadline_enabled);
++  const char* joint_time_env=getenv("ZENFS_RRZC_JOINT_TIME");
++  const bool joint_time_enabled=joint_time_env && !strcmp(joint_time_env,"1");
++  if(joint_time_env && (strcmp(joint_time_env,"1") || !deadline_enabled)) {
++    Error(logger_,"时间一致配置非法：须在时序空间方案中显式启用1");return;
++  }
++  Info(logger_,"时间一致配置：版本=1，启用=%d，旧速率估计不变=1，事件截止原窗口及预计存活期=1，条件到达时间=1",joint_time_enabled);
+   const bool window_credit=window_requested && direct_enabled && independent_sampling &&
+       migration_window_.Enabled() &&
+       !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -87,8 +87,16 @@
+     for(const auto& c:candidates) {
+       const auto b=usable.find(c.zone);const auto f=window_forecasts.find(c.zone);
+       rrzc_deadline::Evidence e;
+-      const auto cost=rrzc_deadline::Estimate(c,b==usable.end()?nullptr:&b->second,
++      rrzc_joint_time::Evidence joint;
++      const auto cost=joint_time_enabled ? rrzc_joint_time::Estimate(c,b==usable.end()?nullptr:&b->second,
++          f==window_forecasts.end()?nullptr:&f->second,recent,deadline_frozen,shadow_horizon,&joint) :
++          rrzc_deadline::Estimate(c,b==usable.end()?nullptr:&b->second,
+           f==window_forecasts.end()?nullptr:&f->second,recent,deadline_frozen,shadow_horizon,&e);
++      if(joint_time_enabled) {
++        e=joint.base;
++        Info(logger_,"时间一致证据：轮次=%lu，Zone=%lu，预计存活纳秒=%lu，事件窗口纳秒=%lu，条件到达纳秒=%lu",
++            shadow_round,c.zone,joint.lifetime_ns,joint.event_window_ns,joint.conditional_ns);
++      }
+       deadline_costs.emplace(c.zone,cost);deadline_evidence.emplace(c.zone,e);
+       const auto& previous=e.growth.previous;
+       Info(logger_,"时序读预测：轮次=%lu，Zone=%lu，近期可知=%d，前快照=%lu，前RC=%lu，前代际=%lu，前块=%u，前PPA=%u/%u/%u/%u，近期增量=%lu，近期间隔=%lu，风险可知=%d，ETA=%lu，预计留存=%lu，窗口=%lu，概率可知=%d，概率十亿分数=%lu，RR复制=%lu，净复制=%lu，原因=%s",

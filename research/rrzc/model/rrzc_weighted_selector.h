@@ -35,7 +35,8 @@ inline uint64_t Score(uint64_t space, uint64_t risk, uint64_t space_weight) {
   return (space*space_weight+risk*(100-space_weight))/100;
 }
 inline bool Eligible(const Candidate& c, uint64_t budget) {
-  return budget > 0 && c.capacity > 0 && c.valid > 0 && c.valid <= c.capacity &&
+  // 零预算取消额外最低回收量，仍要求正回收收益及原安全资格。
+  return c.capacity > 0 && c.valid > 0 && c.valid < c.capacity &&
          c.covered && c.target_available && c.capacity-c.valid >= budget;
 }
 inline Decision Choose(const std::vector<Candidate>& candidates, uint64_t budget, bool weighted,

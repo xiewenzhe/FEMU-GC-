@@ -1,0 +1,34 @@
+--- a/fs/zbd_zenfs.h
++++ b/fs/zbd_zenfs.h
+@@ -1,1 +1,2 @@
+   rrzc_cost::ReserveObservation GetMigrationReserveObservation();
++  rrzc_cost::ReserveObservation GetMigrationSpareObservation();
+--- a/fs/zbd_zenfs.cc
++++ b/fs/zbd_zenfs.cc
+@@ -1,1 +1,26 @@
++rrzc_cost::ReserveObservation ZonedBlockDevice::GetMigrationSpareObservation() {
++  rrzc_cost::ReserveObservation out;
++  out.enabled=migration_reserve_enabled_ && migration_spare_enabled_;
++  if (!out.enabled) return out;
++  // 与原预留观察相同的锁序，不等待、不Acquire、不分配、不改变归属。
++  std::unique_lock<std::mutex> migrate_lock(migrate_zone_mtx_,std::try_to_lock);
++  if (!migrate_lock.owns_lock() || migrating_) { out.reason="迁移管理忙，替补未知"; return out; }
++  std::unique_lock<std::mutex> reserve_lock(migration_reserve_mtx_,std::try_to_lock);
++  if (!reserve_lock.owns_lock()) { out.reason="预留管理忙，替补未知"; return out; }
++  Zone* zone=migration_spare_zone_;
++  out.known=true;out.present=zone!=nullptr;
++  if (!zone) { out.reason="当前没有空替补"; return out; }
++  const auto before=zone->GetResetState();
++  out.zone=zone->start_;out.remaining=zone->capacity_;out.wp=zone->wp_;
++  out.valid=zone->used_capacity_.load();
++  const auto after=zone->GetResetState();
++  out.host_generation=after.generation;out.host_sequence=after.sequence;
++  out.known=zone!=migration_reserve_zone_ && zone->IsEmpty() && !out.valid &&
++      out.wp==out.zone && out.remaining==zone->max_capacity_ &&
++      before.stable && after.stable && before.known && after.known &&
++      before.generation==after.generation && before.sequence==after.sequence;
++  out.reason=out.known ? "当前独占空替补快照，不代表目标已预订" : "替补状态不符或Reset观察变化";
++  return out;
++}
++
+ rrzc_cost::ReserveObservation ZonedBlockDevice::GetMigrationReserveObservation() {

@@ -1,0 +1,10 @@
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -15 +15,5 @@
+-  auto ranked=stable_credit ? rrzc_stable_credit::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :
++  const bool pair_greedy=getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1");
++  Info(logger_,"稳定收益配对模式：轮次=%lu，Greedy=%d，稳定模型=%d，共用安全复核=1",
++      shadow_round,pair_greedy,stable_credit);
++  auto ranked=pair_greedy ? rrzc_direct::Rank(candidates,{}, {},recent.threshold,simple_budget,shadow_horizon) :
++      stable_credit ? rrzc_stable_credit::Rank(candidates,usable,forecasts,recent,growth_history,simple_budget,shadow_horizon) :

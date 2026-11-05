@@ -1,0 +1,70 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -55,6 +55,7 @@
+ #include "rrzc_space_plan.h"
+ #include "rrzc_deadline_selector.h"
+ #include "rrzc_joint_time_selector.h"
++#include "rrzc_terminal_selector.h"
+ #include <chrono>
+ #include "util/coding.h"
+ #include "util/crc32c.h"
+@@ -557,6 +558,12 @@ void ZenFS::GCWorker() {
+     Error(logger_,"时间一致配置非法：须在时序空间方案中显式启用1");return;
+   }
+   Info(logger_,"时间一致配置：版本=1，启用=%d，旧速率估计不变=1，事件截止原窗口及预计存活期=1，条件到达时间=1",joint_time_enabled);
++  const char* terminal_env=getenv("ZENFS_RRZC_TERMINAL");
++  const bool terminal_enabled=terminal_env && !strcmp(terminal_env,"1");
++  if(terminal_env && ((strcmp(terminal_env,"1") && strcmp(terminal_env,"0")) || !joint_time_enabled)) {
++    Error(logger_,"边界配置非法：须在时间一致模型中显式使用0或1");return;
++  }
++  Info(logger_,"边界配置：版本=1，启用=%d，共同空间基准=1，互斥回收=1，延期分数估价=1，窗口纳秒=10000000000",terminal_enabled);
+   const bool window_credit=window_requested && direct_enabled && independent_sampling &&
+       migration_window_.Enabled() &&
+       !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -238,6 +238,35 @@
+           rrzc_space_plan::Decimal(p.reclaimed).c_str(),rrzc_space_plan::Decimal(p.rr_copy).c_str(),
+           rrzc_space_plan::Decimal(p.rr_space).c_str(),rrzc_space_plan::Decimal(p.Total()).c_str());
+     }
++    if(terminal_enabled) {
++      std::vector<rrzc_terminal::Input> boundary;
++      for(const auto& x:inputs) {
++        const auto b=usable.find(x.row.candidate.zone);
++        const auto f=window_forecasts.find(x.row.candidate.zone);
++        bool known=false;uint64_t valid=x.row.candidate.valid;
++        if(b!=usable.end())valid=rrzc_terminal::TerminalValid(x.row.candidate,
++            f==window_forecasts.end()?nullptr:&f->second,b->second.generation,shadow_horizon,&known);
++        boundary.push_back({x,known,valid});
++        Info(logger_,"边界留存：轮次=%lu，Zone=%lu，可知=%d，窗口纳秒=%lu，末态有效=%lu",
++            shadow_round,x.row.candidate.zone,known,shadow_horizon,valid);
++      }
++      const auto revised=rrzc_terminal::Select(boundary,need);
++      Info(logger_,"边界基准：轮次=%lu，完整定价=%d，空间字节=%lu，原选择存在=%d，原选择=%lu",
++          shadow_round,revised.correction_known,revised.reference_space,plan.found,plan.zone);
++      for(const auto& p:revised.plans) {
++        Info(logger_,"边界方案：轮次=%lu，首区=%lu，预计空间=%lu，空间缺口=%lu，已定价=%d，延期复制=%s，合计估价=%s",
++            shadow_round,p.base.first,p.expected_space,p.space_gap,p.priced,
++            rrzc_space_plan::Decimal(p.deferred_copy).c_str(),rrzc_space_plan::Decimal(p.Total()).c_str());
++        for(const auto& t:p.completion)
++          Info(logger_,"边界补足：轮次=%lu，首区=%lu，Zone=%lu，可用空间=%lu，全份复制=%lu，计价空间=%lu，计价复制=%lu",
++              shadow_round,p.base.first,t.zone,t.available_space,t.full_copy,t.priced_space,t.priced_copy);
++      }
++      if(revised.found)for(const auto& row:ranked)if(row.candidate.zone==revised.zone){
++        decision.found=true;decision.selected=row.candidate;break;
++      }
++      Info(logger_,"边界方案决策：轮次=%lu，实际存在=%d，实际Zone=%lu，仅进展=%d",
++          shadow_round,decision.found,decision.found?decision.selected.zone:0,revised.progress_only);
++    } else {
+     if(plan.found)for(const auto& row:ranked)if(row.candidate.zone==plan.zone){
+       decision.found=true;decision.selected=row.candidate;break;
+     }
+@@ -245,5 +274,6 @@
+     Info(logger_,"时序方案决策：轮次=%lu，实际存在=%d，实际Zone=%lu，仅进展=%d",
+         shadow_round,decision.found,decision.found?decision.selected.zone:0,plan.progress_only);
++    }
+   } else if(space_plan) {
+     // 聚合空间不是空Zone保证；分配等待时保留进展路径。快照未知也不作无操作。
+     const uint64_t plan_free=zbd_->GetFreeSpace();

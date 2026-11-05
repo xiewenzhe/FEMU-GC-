@@ -1,0 +1,24 @@
+diff --git a/fs/fs_zenfs.cc b/fs/fs_zenfs.cc
+--- a/fs/fs_zenfs.cc
++++ b/fs/fs_zenfs.cc
+@@ -540,7 +540,7 @@ void ZenFS::GCWorker() {
+   if(space_plan_env && (strcmp(space_plan_env,"1") || !direct_enabled || !candidate_pool.expanded)) {
+     Error(logger_,"空间方案配置非法：只接受直接选区及expanded候选下的显式1，停止实验维护线程");return;
+   }
+-  Info(logger_,"空间方案配置：版本=1，启用=%d，外部GC检查不变=1，按字节需求=1，预测RR空间不抵当前缺口=1，仅执行首区=1",space_plan);
++  Info(logger_,"空间方案配置：版本=2，启用=%d，外部GC检查不变=1，按字节需求=1，预测RR空间不抵当前缺口=1，仅执行首区=1",space_plan);
+   const bool window_credit=window_requested && direct_enabled && independent_sampling &&
+       migration_window_.Enabled() &&
+       !(getenv("ZENFS_RRZC_PAIR_GREEDY") && !strcmp(getenv("ZENFS_RRZC_PAIR_GREEDY"),"1")) &&
+diff --git a/fs/rrzc_direct_zenfs.inc b/fs/rrzc_direct_zenfs.inc
+--- a/fs/rrzc_direct_zenfs.inc
++++ b/fs/rrzc_direct_zenfs.inc
+@@ -181,7 +181,7 @@
+     std::vector<rrzc_space_plan::Input> inputs;
+     for(const auto& row:ranked)inputs.push_back({row,forecast_rr_space.count(row.candidate.zone)?
+         forecast_rr_space.at(row.candidate.zone):0});
+-    const auto plan=rrzc_space_plan::Select(inputs,need);
++    const auto plan=rrzc_space_plan::Select(inputs,need,true);
+     Info(logger_,"空间方案需求：轮次=%lu，可知=%d，空闲=%lu，非空闲=%lu，分配等待=%lu，目标字节=%lu，缺口字节=%lu，目标百分比=%u",
+         shadow_round,need.known,need.free,need.non_free,need.waiters,need.target,need.bytes,unsigned(GC_START_LEVEL));
+     for(const auto& p:plan.plans) {
