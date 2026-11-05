@@ -1,0 +1,22 @@
+diff --git a/joint_opportunity_smoke.cc b/joint_opportunity_smoke.cc
+--- a/joint_opportunity_smoke.cc
++++ b/joint_opportunity_smoke.cc
+@@ -161,6 +161,7 @@ static void joint_run(ZenFS& fs,ZonedBlockDevice& d,std::shared_ptr<Logger> logger,
+        scenario.c_str(),requests,retired);
+   std::cout<<"观察完成："<<scenario<<"，真实后续读取="<<requests<<std::endl;
+ }
++#include "joint_followup.h"
+ int main(int argc,char** argv) {
+   try {
+     require(argc==4,"用法：程序 run|verify 场景 新结果目录");
+@@ -174,7 +175,9 @@ int main(int argc,char** argv) {
+     std::shared_ptr<Logger> logger;check(Env::Default()->NewLogger(log,&logger));logger->SetInfoLogLevel(DEBUG_LEVEL);
+     auto owned=std::make_unique<ZonedBlockDevice>("nvme0n1",ZbdBackendType::kBlockDev,logger);check(owned->Open(false,true));
+     auto* d=owned.get();auto fs=std::make_unique<ZenFS>(owned.release(),FileSystem::Default(),logger);check(fs->Mount(false));
+-    if(readonly)joint_verify(*fs,scenario);else joint_run(*fs,*d,logger,scenario,out);
++    require(scenario=="opportunity","后续压力只登记持续存活场景");
++    if(readonly){joint_verify(*fs,scenario);followup_verify(*fs);}
++    else{joint_run(*fs,*d,logger,scenario,out);followup_run(*fs,*d,logger,out);}
+     return 0;
+   }catch(const std::exception& error){std::cerr<<"联合维护短测失败："<<error.what()<<std::endl;return 1;}
+ }

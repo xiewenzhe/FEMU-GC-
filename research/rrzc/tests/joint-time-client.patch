@@ -1,0 +1,57 @@
+diff --git a/joint_opportunity_smoke.cc b/joint_opportunity_smoke.cc
+--- a/joint_opportunity_smoke.cc
++++ b/joint_opportunity_smoke.cc
+@@ -13,7 +13,7 @@ static std::string joint_file(unsigned i,bool dead=false) {
+   return "/v1-execution-smoke/joint"+std::to_string(i)+(dead?".dead.sst":".live.sst");
+ }
+ static uint64_t joint_hot_bytes(const std::string& scenario) {
+-  return (scenario=="low-yield" ? 24 : scenario=="retire" ? 8 : scenario=="eligible-cost" ? 10 : 5)*MiB;
++  return (scenario=="low-yield" ? 120 : scenario=="retire" ? 8 : scenario=="eligible-cost" ? 10 : 5)*MiB;
+ }
+ static rrzc_v1::RecentReport joint_recent(ZonedBlockDevice& d) {
+   rrzc_v1::RecentReport r;check(d.GetZoneRecentReads(&r));
+@@ -29,7 +29,7 @@ static void joint_verify(ZenFS& fs,const std::string& scenario) {
+     if(!filler && id==1 && scenario=="retire") {
+       require(fs.FileExists(name,IOOptions(),nullptr).IsNotFound(),"预定退役文件仍存在");continue;
+     }
+-    const uint64_t bytes=filler ? JointZone : id ? joint_hot_bytes(scenario) : 4*MiB;
++    const uint64_t bytes=filler ? (i+1==JointFillers?JointZone/2:JointZone) : id ? joint_hot_bytes(scenario) : 4*MiB;
+     uint64_t size=0;check(fs.GetFileSize(name,IOOptions(),&size,nullptr));require(size==bytes,"校验长度错误");
+     expected.fill(filler ? 100+i : id+1);
+     std::unique_ptr<FSRandomAccessFile> reader;check(fs.NewRandomAccessFile(name,o,&reader,nullptr));
+@@ -113,12 +113,12 @@ static void joint_run(ZenFS& fs,ZonedBlockDevice& d,std::shared_ptr<Logger> logg
+     std::this_thread::sleep_for(std::chrono::seconds(7));ready=joint_recent(d);
+     require(block(ready,source[1]).rc==JointSeed && !block(ready,source[1]).delta10,"热读停止场景仍有近期读数");
+   }
+-  // 真实写入最后两份填充文件，将空闲从24%降至17%，由原线程自然触发GC。
++  // 最后一份只写半区，将空闲降至18%；这是独立受控布局，不改变GC触发条件。
+   for(unsigned i=JointFillers-2;i<JointFillers;++i)
+-    write(fs,"/v1-execution-smoke/filler"+std::to_string(i)+".bin",JointZone,100+i,Env::WLTH_MEDIUM,data,o);
++    write(fs,"/v1-execution-smoke/filler"+std::to_string(i)+".bin",i+1==JointFillers?JointZone/2:JointZone,100+i,Env::WLTH_MEDIUM,data,o);
+   data.fill(2);ready=joint_recent(d);
+   const auto current_free=d.GetFreeSpace(),current_nonfree=d.GetUsedSpace()+d.GetReclaimableSpace();
+-  require(100*current_free/(current_free+current_nonfree)==17 &&
++  require(100*current_free/(current_free+current_nonfree)==18 &&
+       block(ready,source[1]).rc==JointSeed && !block(ready,source[0]).rc,
+       "触发前初始空间或真实RC已变化，拒绝继续");
+   record(observations,"释放前",ready,source);
+@@ -127,7 +127,7 @@ static void joint_run(ZenFS& fs,ZonedBlockDevice& d,std::shared_ptr<Logger> logg
+   for(unsigned i=0;i<2;++i) {
+     const auto b=block(ready,source[i]);
+     initial<<i<<','<<source[i]<<','<<(i?joint_hot_bytes(scenario):4*MiB)<<','<<b.rc<<','<<b.delta10<<','
+-        <<b.delta30<<','<<b.block_id<<','<<b.generation<<",17\n";
++        <<b.delta30<<','<<b.block_id<<','<<b.generation<<",18\n";
+   }
+   initial.close();require(initial.good(),"初始状态写入失败");
+   // 新短窗停止场景不再等待11秒：保留十秒旧热度，但后续不再读取。
+@@ -172,8 +172,8 @@ int main(int argc,char** argv) {
+         "场景或隔离目录不符");
+     const auto log=out+"/zenfs."+stage+".log";require(!std::filesystem::exists(log),"拒绝覆盖原始日志");
+     std::shared_ptr<Logger> logger;check(Env::Default()->NewLogger(log,&logger));logger->SetInfoLogLevel(DEBUG_LEVEL);
+-    auto owned=std::make_unique<ZonedBlockDevice>("nvme0n1",ZbdBackendType::kBlockDev,logger);check(owned->Open(readonly,true));
+-    auto* d=owned.get();auto fs=std::make_unique<ZenFS>(owned.release(),FileSystem::Default(),logger);check(fs->Mount(readonly));
++    auto owned=std::make_unique<ZonedBlockDevice>("nvme0n1",ZbdBackendType::kBlockDev,logger);check(owned->Open(false,true));
++    auto* d=owned.get();auto fs=std::make_unique<ZenFS>(owned.release(),FileSystem::Default(),logger);check(fs->Mount(false));
+     if(readonly)joint_verify(*fs,scenario);else joint_run(*fs,*d,logger,scenario,out);
+     return 0;
+   }catch(const std::exception& error){std::cerr<<"联合维护短测失败："<<error.what()<<std::endl;return 1;}

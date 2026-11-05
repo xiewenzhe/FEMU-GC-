@@ -1,0 +1,19 @@
+diff --git a/core/rrzc_independent_keys.h b/core/rrzc_independent_keys.h
+--- a/core/rrzc_independent_keys.h
++++ b/core/rrzc_independent_keys.h
+@@ -34,8 +34,14 @@ class RRZCIndependentKeys {
+         Proportion(p, "scanproportion", "0") != 0 ||
+         Proportion(p, "readmodifywriteproportion", "0") != 0)
+       throw utils::Exception("独立选键只支持读和更新，比例之和必须为1");
++    // 更新区间默认覆盖全库；先验证减法边界，避免起点与长度相加溢出。
++    const auto start = Number(p.GetProperty("rrzc.update_key_start", "0"));
++    const auto count = Number(p.GetProperty("rrzc.update_key_count", std::to_string(records)));
++    if (start >= records || count < 2 || count > records - start)
++      throw utils::Exception("更新区间必须位于已装载键空间内且至少包含两个键");
++    // 不改变读生成器和构造顺序；默认区间应保持原请求序列完全一致。
+     read_.reset(new ScrambledZipfianGenerator(0, hot - 1));
+-    update_.reset(new UniformGenerator(0, records - 1));
++    update_.reset(new UniformGenerator(start, start + count - 1));
+   }
+ 
+   bool enabled() const { return read_ != nullptr; }

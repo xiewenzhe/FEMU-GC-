@@ -1,0 +1,31 @@
+diff --git a/core/client.h b/core/client.h
+--- a/core/client.h
++++ b/core/client.h
+@@ -19 +19,2 @@
+ #include "utils/utils.h"
++#include "rrzc_client_phase.h"
+@@ -31 +32,3 @@
++    if (!is_loading && rrzc_client_phase::Global().Enabled())
++      rrzc_client_phase::Global().Start(num_ops,rrzc_client_phase::Now());
+     int ops = 0;
+@@ -45,3 +48,9 @@
++    if (!is_loading && rrzc_client_phase::Global().Enabled())
++      rrzc_client_phase::Global().RequestsDone(rrzc_client_phase::Now());
+     if (cleanup_db) {
++      if (!is_loading && rrzc_client_phase::Global().Enabled())
++        rrzc_client_phase::Global().CleanupBegin(rrzc_client_phase::Now());
+       db->Cleanup();
++      if (!is_loading && rrzc_client_phase::Global().Enabled())
++        rrzc_client_phase::Global().CleanupDone(rrzc_client_phase::Now());
+     }
+diff --git a/core/ycsbc.cc b/core/ycsbc.cc
+--- a/core/ycsbc.cc
++++ b/core/ycsbc.cc
+@@ -220 +220,4 @@
++    const char* phase_timing = std::getenv("YCSB_PHASE_TIMING");
++    rrzc_client_phase::Global().Arm(phase_timing && std::string(phase_timing)=="1",num_threads);
++
+     timer.Start();
+@@ -267 +270,2 @@
+     std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
++    rrzc_client_phase::Global().Print(std::cout);

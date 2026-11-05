@@ -1,0 +1,25 @@
+diff --git a/core/db_wrapper.h b/core/db_wrapper.h
+--- a/core/db_wrapper.h
++++ b/core/db_wrapper.h
+@@ -24,1 +24,1 @@
+-  DBWrapper(DB *db, Measurements *measurements) : db_(db), measurements_(measurements) {}
++  DBWrapper(DB *db, Measurements *measurements) : db_(db), measurements_(measurements) { rrzc_ycsb::Bind(measurements); }
+@@ -52,0 +53,1 @@
++    rrzc_ycsb::RecordScan(key,record_count,result,s);
+diff --git a/core/core_workload.cc b/core/core_workload.cc
+--- a/core/core_workload.cc
++++ b/core/core_workload.cc
+@@ -1,0 +1,1 @@
++#include "rrzc_ycsb_audit.h"
+@@ -273,1 +274,3 @@
+-  switch (op_chooser_.Next()) {
++  const auto operation=op_chooser_.Next();
++  rrzc_ycsb::MarkTransaction(operation);
++  switch (operation) {
+@@ -308,0 +312,1 @@
++  rrzc_ycsb::BeginRmw();
+@@ -327,1 +331,3 @@
+-  return db.Update(table_name_, key, values);
++  const auto status=db.Update(table_name_, key, values);
++  rrzc_ycsb::EndRmw(status);
++  return status;

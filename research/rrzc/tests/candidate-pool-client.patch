@@ -1,0 +1,12 @@
+diff --git a/joint_opportunity_smoke.cc b/joint_opportunity_smoke.cc
+--- a/joint_opportunity_smoke.cc
++++ b/joint_opportunity_smoke.cc
+@@ -15 +15 @@
+-  return (scenario=="low-yield" ? 24 : scenario=="retire" ? 8 : scenario=="eligible-cost" ? 10 : 5)*MiB;
++  return (scenario=="low-yield" ? 120 : scenario=="retire" ? 8 : scenario=="eligible-cost" ? 10 : 5)*MiB;
+@@ -175 +175 @@
+-    auto owned=std::make_unique<ZonedBlockDevice>("nvme0n1",ZbdBackendType::kBlockDev,logger);check(owned->Open(readonly,true));
++    auto owned=std::make_unique<ZonedBlockDevice>("nvme0n1",ZbdBackendType::kBlockDev,logger);check(owned->Open(false,true));
+@@ -176 +176 @@
+-    auto* d=owned.get();auto fs=std::make_unique<ZenFS>(owned.release(),FileSystem::Default(),logger);check(fs->Mount(readonly));
++    auto* d=owned.get();auto fs=std::make_unique<ZenFS>(owned.release(),FileSystem::Default(),logger);check(fs->Mount(false));

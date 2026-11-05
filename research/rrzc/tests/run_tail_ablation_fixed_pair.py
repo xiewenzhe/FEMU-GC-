@@ -86,6 +86,8 @@ class FixedPair(Pair):
         with socket.socket() as probe:
             require(probe.connect_ex(("127.0.0.1",int(self.port))) != 0,"实验端口启动前被占用")
         self.command(["./build-femu/qemu-img","create","-f","qcow2","-F","qcow2","-b",str(self.parent_image),str(image)])
+        if hasattr(self, 'image_created'):
+            self.image_created(image, self.parent_image)
         self.command(["./build-femu/qemu-system-x86_64","-name",f"FEMU-{label}",
             "-enable-kvm","-cpu","host","-smp","4","-m","4G","-device","virtio-scsi-pci,id=scsi0",
             "-device","scsi-hd,drive=hd0","-drive",f"file={image},if=none,aio=native,cache=none,format=qcow2,id=hd0",

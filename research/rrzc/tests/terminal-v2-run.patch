@@ -1,0 +1,28 @@
+diff --git a/run_joint_time_guest.sh b/run_joint_time_guest.sh
+--- a/run_joint_time_guest.sh
++++ b/run_joint_time_guest.sh
+@@ -5,5 +5,8 @@
+-[[ $# == 2 && $(id -u) == 0 && ( $1 == space || $1 == joint ) ]]
++[[ $# == 3 && $(id -u) == 0 && ( $1 == space || $1 == joint ) && ( $3 == stable || $3 == aging ) ]]
+ mode=$1
+ scenario=$2
++aging=0
++[[ $3 == stable ]] || aging=1
+ [[ $scenario == opportunity || $scenario == stopped || $scenario == retire ]]
++[[ $scenario == opportunity ]]
+ enabled=0
+@@ -25,3 +28,4 @@
+ printf '策略=%s\n候选范围=expanded\nGreedy开关=%s\nRR成本开关=%s\n时间一致开关=1\n' "$mode" "$greedy" "$enabled" > "$result/策略.txt"
++printf '留存负载=%s\n先验退役开关=%s\n' "$3" "$aging" > "$result/负载.txt"
+ status=0
+ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 RRZC_JOINT_TRACE=1 \
+@@ -39,3 +43,4 @@
+   ZENFS_RRZC_CANDIDATE_POOL=expanded ZENFS_RRZC_SPACE_PLAN=1 ZENFS_RRZC_DEADLINE=1 ZENFS_RRZC_JOINT_TIME=1 \
++  ZENFS_RRZC_TERMINAL=1 RRZC_TERMINAL_AGING="$aging" \
+   "$target/joint_time_smoke" run "$scenario" "$result" > "$result/run.stdout.log" 2>&1 || status=$?
+ printf '%s\n' "$status" > "$result/run.exit"
+@@ -48,3 +53,4 @@
+     ZENFS_RRZC_MIGRATION_SPARE=1 ZENFS_RRZC_CONTENT_GUARD=1 \
++    RRZC_TERMINAL_AGING="$aging" \
+     "$target/joint_time_smoke" verify "$scenario" "$result" > "$result/verify.stdout.log" 2>&1 || status=$?
+   printf '%s\n' "$status" > "$result/verify.exit"

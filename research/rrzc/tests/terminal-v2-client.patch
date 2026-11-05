@@ -1,0 +1,66 @@
+diff --git a/joint_opportunity_smoke.cc b/joint_opportunity_smoke.cc
+--- a/joint_opportunity_smoke.cc
++++ b/joint_opportunity_smoke.cc
+@@ -11,3 +11,7 @@
+ constexpr unsigned JointFillers=22;
++static bool terminal_aging() {
++  const char* value=std::getenv("RRZC_TERMINAL_AGING");
++  return value && !std::strcmp(value,"1");
++}
+ static std::string joint_file(unsigned i,bool dead=false) {
+   return "/v1-execution-smoke/joint"+std::to_string(i)+(dead?".dead.sst":".live.sst");
+@@ -28,3 +32,8 @@
+     const auto name=filler ? "/v1-execution-smoke/filler"+std::to_string(i)+".bin" : joint_file(id);
++    if(!filler && id==0 && terminal_aging()) {
++      require(fs.FileExists(name,IOOptions(),nullptr).IsNotFound(),"预定退役冷文件仍存在");
++      std::cout<<"冷文件退役校验通过：未将已删除载荷作为存活文件校验\n";
++      continue;
++    }
+     if(!filler && id==1 && scenario=="retire") {
+       require(fs.FileExists(name,IOOptions(),nullptr).IsNotFound(),"预定退役文件仍存在");continue;
+@@ -62,3 +71,8 @@
+-    write(fs,joint_file(i,true),JointZone-bytes,10+i,Env::WLTH_MEDIUM,data,o);
+-    require(extent(fs,joint_file(i,true),JointZone-bytes).zone_start==source[i] &&
++    if(terminal_aging() && !i) {
++      write(fs,"/v1-execution-smoke/aged.sst",8*MiB,42,Env::WLTH_MEDIUM,data,o);
++      require(extent(fs,"/v1-execution-smoke/aged.sst",8*MiB).zone_start==source[i],"先验退役文件没有同区放置");
++    }
++    const uint64_t dead_bytes=JointZone-bytes-(terminal_aging() && !i?8*MiB:0);
++    write(fs,joint_file(i,true),dead_bytes,10+i,Env::WLTH_MEDIUM,data,o);
++    require(extent(fs,joint_file(i,true),dead_bytes).zone_start==source[i] &&
+             d.GetIOZone(source[i])->IsFull(),"有效和待退役载荷没有同区写满");
+@@ -95,2 +110,11 @@
+-  align();std::this_thread::sleep_for(std::chrono::seconds(6));
++  align();
++  if(terminal_aging()) {
++    std::this_thread::sleep_for(std::chrono::seconds(4));
++    require(d.GetIOZone(source[0])->used_capacity_==12*MiB,"先验退役前冷区有效量不符");
++    check(fs.DeleteFile("/v1-execution-smoke/aged.sst",IOOptions(),nullptr));
++    require(d.GetIOZone(source[0])->used_capacity_==4*MiB,"先验退役后冷区有效量不符");
++    Info(logger,"留存先验退役：冷源=%lu，已删除字节=%lu，仍有效字节=%lu，发生于选区之前=1",
++        source[0],8*MiB,4*MiB);
++  }
++  std::this_thread::sleep_for(std::chrono::seconds(terminal_aging()?2:6));
+   std::unique_ptr<FSRandomAccessFile> reader;check(fs.NewRandomAccessFile(joint_file(1),o,&reader,nullptr));
+@@ -149,2 +168,8 @@
++  if(terminal_aging()) {
++    std::this_thread::sleep_until(start+std::chrono::seconds(8));
++    check(fs.DeleteFile(joint_file(0),IOOptions(),nullptr));
++    Info(logger,"留存后续退役：冷文件已删除=1，字节=%lu，实际纳秒=%ld",4*MiB,
++        static_cast<long>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start).count()));
++  }
+   if(scenario=="retire") {
+     std::this_thread::sleep_until(start+std::chrono::seconds(4));reader.reset();
+diff --git a/joint_followup.h b/joint_followup.h
+--- a/joint_followup.h
++++ b/joint_followup.h
+@@ -6,6 +6,8 @@
+   if(summary.tellp()==0) summary<<"阶段,空闲字节,有效字节,可回收字节,冷当前Zone,热当前Zone\n";
++  const auto cold=find(fs,joint_file(0));
++  require(cold || (terminal_aging() && fs.FileExists(joint_file(0),IOOptions(),nullptr).IsNotFound()),"冷文件意外缺失");
+   summary<<phase<<','<<d.GetFreeSpace()<<','<<d.GetUsedSpace()<<','<<d.GetReclaimableSpace()<<','
+-         <<extent(fs,joint_file(0),4*MiB).zone_start<<','
++         <<(cold?cold->zone_start:0)<<','
+          <<extent(fs,joint_file(1),5*MiB).zone_start<<'\n';
+   summary.close();require(summary.good(),"后续空间记录失败");
+   ZenFSSnapshot snapshot;ZenFSSnapshotOptions options;options.zone_=true;
