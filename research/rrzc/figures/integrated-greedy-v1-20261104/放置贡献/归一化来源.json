@@ -1,0 +1,8 @@
+{
+  "来源": "research/rrzc/figures/integrated-greedy-v1-20261104/放置贡献来源.json",
+  "输入SHA256": "ae160225bf52cbd29a10d2c9dea35b42e33b309909949fb0a892f215f267d035",
+  "绘图器SHA256": "e20055ee2cafcabbbc9b4bdf820becce409f31739598cd71348253c086cfed56",
+  "公式": "每次机制值除以对应Greedy值；零基线不造比值",
+  "机制重复完全相同": true,
+  "物理Block擦除": "未直接采集，不作实测图"
+}

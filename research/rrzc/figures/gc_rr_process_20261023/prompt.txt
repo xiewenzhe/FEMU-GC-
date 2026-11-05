@@ -1,0 +1,36 @@
+Use case: scientific-educational
+Asset type: 中文科研汇报用横向流程示意图，约16:9，高分辨率，白底，清晰易读。
+Primary request: 为“面向ZNS SSD的RR感知Zone Cleaning”课题画一张专业而直观的图，突出GC和RR操作过程非常相似。RR是Read Reclaim读回收，绝不能解释为Round Robin或Read Retry。GC在本项目中指主机端Zone Cleaning。根据已核对的项目路径绘制正常成功迁移过程，不是实验数据，不要编造性能数字或节省比例。
+
+Visual design:
+Use crisp flat scientific illustration, neat vector-like edges, elegant sans-serif Simplified Chinese typography, dark navy text, very pale blue panels, consistent line weights, generous white space. GC identification uses blue, RR identification uses orange, but all shared operation cards and arrows must use exactly the same geometry and teal color to emphasize their correspondence. No 3D, no decorative photos, no mascots, no glow. Keep readable Chinese text large.
+
+Layout:
+Top title exactly “GC 与 RR：触发不同，迁移过程相似”
+Subtitle exactly “面向 ZNS SSD 的主机端 Zone 维护”
+Middle upper area has TWO horizontal parallel lanes, GC above RR. Each lane begins with a trigger badge, followed by FIVE exactly aligned numbered operation cards joined left-to-right by arrows. Use the same five cards, same wording, same icons in both lanes. Each lane should be visually nearly identical after its trigger badge.
+GC lane trigger badge: “GC / Zone Cleaning” and “空闲空间不足” and small “目的：回收空间”
+RR lane trigger badge: “RR / Read Reclaim” and “Block 读计数达到阈值” and small “目的：刷新数据，降低读干扰风险”
+Five cards in each lane, verbatim labels:
+“1  确定源 Zone”
+“2  读取有效数据”
+“3  写入目标 Zone”
+“4  更新并持久化映射”
+“5  安全 Reset 源 Zone”
+Use simple icons respectively: source storage strip, read arrow, write arrow to target strip, logical-to-physical mapping lines, empty storage strip with circular reset arrow.
+A quiet visual alignment bracket under both lanes says exactly “共同核心：有效数据迁移 + 映射更新 + 源区重置”
+
+Lower area: one large, clear shared data movement diagram illustrating the SAME mechanics for GC and RR. It is a schematic of data, not numeric results.
+Left box titled “源 Zone（迁移前）”: eight equal rectangles in a single row, with exactly three valid teal blocks labeled A, B, C interspersed with five light gray invalid blocks bearing a small ×. Arrange A, ×, B, ×, ×, C, ×, ×. Highlight one valid block with an orange outline, with annotation “RR 由块级读压力触发，按源 Zone 搬迁有效数据”. Do not imply all blocks reached the read threshold.
+Center upper target box titled “目标 Zone（迁移后）”: eight rectangles, first three teal labeled A B C, remaining five white with thin border representing writable capacity. Three clear teal curved arrows connect source A B C to target A B C without connecting invalid blocks. Text near arrows exactly “仅复制有效数据”
+Center lower small logical mapping icon with label “逻辑数据不变，物理位置改变”.
+Right box titled “源 Zone（Reset 后）”: eight empty white outlined rectangles, visually all writable, labeled “重新可写”. Put a light arrow from source to this final box, routed below the target, with label “映射提交且源区可安全回收后”.
+Legend: teal square “有效数据”, gray square × “无效数据”, white outlined square “可写空间”.
+Very bottom a highlighted understated research motivation band, verbatim:
+“课题切入点：GC 选区时考虑 RR 风险，探索用一次迁移同时完成空间回收与数据刷新”
+Smaller footnote exactly “正常成功路径示意；Reset 需满足安全条件；协同收益需实验验证。”
+Constraints: visually accurate page movement and correct matching A/B/C; no copying invalid data; never erase source before mapping persistence; do not say GC and RR are completely identical; no experimental numbers; do not imply risk-aware selection is proven to reduce total migration. Keep all Chinese text sharp and correctly spelled.
+
+Targeted revision:
+undefined
+

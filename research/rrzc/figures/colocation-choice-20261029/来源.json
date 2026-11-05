@@ -1,0 +1,6 @@
+{
+  "结果": "/home/data/xwz/rrzc-baselines/joint-controlled-colocation-choice-v3-20261029-results/四组合核验.json",
+  "结果SHA256": "596d2dd95fcfde2beed2c22a5942b903b60d1861c33379ba7f4d70c0c078c239",
+  "绘图源码SHA256": "9cc743c6d13ba56550658950974f137c27691e016b5872fac355c56e63bb7aa1",
+  "边界": "显式受控文件、原候选、固定历史节奏和检查边界；不是RocksDB/YCSB性能；不预设正收益"
+}

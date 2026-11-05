@@ -1,0 +1,6 @@
+{
+  "结果": "/home/data/xwz/rrzc-baselines/joint-controlled-sst-cohort0-v1-20261030-results/生命周期机会核验.json",
+  "结果SHA256": "cedb74dd0c2457f97b20342ada227193aab95a37113c63dc723f2a744f4e8d04",
+  "绘图源码SHA256": "68e4c207d50915f26dd8440fc73cda9362a774f4745406de740ec3abdfd23161",
+  "边界": "真实定制db_bench的Greedy重复；SST存活按实际元数据与extent核验，不代表模型收益"
+}

@@ -1,0 +1,749 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="972pt" height="597.6pt" viewBox="0 0 972 597.6" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-05T19:01:13.273893</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.9, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 597.6 
+L 972 597.6 
+L 972 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 72.9 253.648 
+L 299.446875 253.648 
+L 299.446875 107.568 
+L 72.9 107.568 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <defs>
+       <path id="m4c330eda76" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m4c330eda76" x="136.924117" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="136.924117" y="269.133937" transform="rotate(-0 136.924117 269.133937)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_2">
+      <g>
+       <use xlink:href="#m4c330eda76" x="235.422758" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="235.422758" y="268.732375" transform="rotate(-0 235.422758 268.732375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_3">
+      <defs>
+       <path id="mf709d158ce" d="M 0 0 
+L -3.5 0 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="257.076125" transform="rotate(-0 65.9 257.076125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="208.351876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="211.780001" transform="rotate(-0 65.9 211.780001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_5">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="163.055752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="166.483877" transform="rotate(-0 65.9 166.483877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="117.759628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="121.187753" transform="rotate(-0 65.9 121.187753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_7">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="45.101562" y="180.608" transform="rotate(-90 45.101562 180.608)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 72.9 253.648 
+L 72.9 107.568 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 72.9 253.648 
+L 299.446875 253.648 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 111.31447 253.648 
+L 162.533764 253.648 
+L 162.533764 140.40769 
+L 111.31447 140.40769 
+z
+" clip-path="url(#pa1448ee241)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 209.813111 253.648 
+L 261.032405 253.648 
+L 261.032405 243.992672 
+L 209.813111 243.992672 
+z
+" clip-path="url(#pa1448ee241)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="136.924117" y="128.580659" transform="rotate(-0 136.924117 128.580659)">1.000</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="235.422758" y="232.165641" transform="rotate(-0 235.422758 232.165641)">0.085</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="186.173437" y="93.568" transform="rotate(-0 186.173437 93.568)">应用读完成延迟 P99 ↓</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_7">
+    <path d="M 394.596563 253.648 
+L 621.143437 253.648 
+L 621.143437 107.568 
+L 394.596563 107.568 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_3">
+     <g id="line2d_7">
+      <g>
+       <use xlink:href="#m4c330eda76" x="458.620679" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="458.620679" y="269.133937" transform="rotate(-0 458.620679 269.133937)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#m4c330eda76" x="557.119321" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_12">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="557.119321" y="268.732375" transform="rotate(-0 557.119321 268.732375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_5">
+     <g id="line2d_9">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_13">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="257.076125" transform="rotate(-0 387.596563 257.076125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="208.351876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_14">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="211.780001" transform="rotate(-0 387.596563 211.780001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_11">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="163.055752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_15">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="166.483877" transform="rotate(-0 387.596563 166.483877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_8">
+     <g id="line2d_12">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="117.759628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_16">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="121.187753" transform="rotate(-0 387.596563 121.187753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_17">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="366.798125" y="180.608" transform="rotate(-90 366.798125 180.608)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_8">
+    <path d="M 394.596563 253.648 
+L 394.596563 107.568 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 394.596563 253.648 
+L 621.143437 253.648 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 433.011033 253.648 
+L 484.230326 253.648 
+L 484.230326 140.40769 
+L 433.011033 140.40769 
+z
+" clip-path="url(#pe40481fcf9)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 531.509674 253.648 
+L 582.728967 253.648 
+L 582.728967 242.484037 
+L 531.509674 242.484037 
+z
+" clip-path="url(#pe40481fcf9)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="458.620679" y="128.580659" transform="rotate(-0 458.620679 128.580659)">1.000</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="557.119321" y="230.657006" transform="rotate(-0 557.119321 230.657006)">0.099</text>
+   </g>
+   <g id="text_20">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="507.87" y="93.568" transform="rotate(-0 507.87 93.568)">应用读完成延迟 P99.9 ↓</text>
+   </g>
+  </g>
+  <g id="axes_3">
+   <g id="patch_12">
+    <path d="M 716.293125 253.648 
+L 942.84 253.648 
+L 942.84 107.568 
+L 716.293125 107.568 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_5">
+    <g id="xtick_5">
+     <g id="line2d_13">
+      <g>
+       <use xlink:href="#m4c330eda76" x="780.317242" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_21">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="780.317242" y="269.133937" transform="rotate(-0 780.317242 269.133937)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_14">
+      <g>
+       <use xlink:href="#m4c330eda76" x="878.815883" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_22">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="878.815883" y="268.732375" transform="rotate(-0 878.815883 268.732375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_6">
+    <g id="ytick_9">
+     <g id="line2d_15">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="253.648" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_23">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="257.076125" transform="rotate(-0 709.293125 257.076125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_10">
+     <g id="line2d_16">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="208.351876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_24">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="211.780001" transform="rotate(-0 709.293125 211.780001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_11">
+     <g id="line2d_17">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="163.055752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_25">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="166.483877" transform="rotate(-0 709.293125 166.483877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_12">
+     <g id="line2d_18">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="117.759628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_26">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="121.187753" transform="rotate(-0 709.293125 121.187753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_27">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="688.494687" y="180.608" transform="rotate(-90 688.494687 180.608)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_13">
+    <path d="M 716.293125 253.648 
+L 716.293125 107.568 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 716.293125 253.648 
+L 942.84 253.648 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 754.707595 253.648 
+L 805.926889 253.648 
+L 805.926889 140.40769 
+L 754.707595 140.40769 
+z
+" clip-path="url(#p0daaf737c3)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 853.206236 253.648 
+L 904.42553 253.648 
+L 904.42553 245.471355 
+L 853.206236 245.471355 
+z
+" clip-path="url(#p0daaf737c3)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_28">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="780.317242" y="128.580659" transform="rotate(-0 780.317242 128.580659)">1.000</text>
+   </g>
+   <g id="text_29">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="878.815883" y="233.644324" transform="rotate(-0 878.815883 233.644324)">0.072</text>
+   </g>
+   <g id="text_30">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="829.566562" y="93.568" transform="rotate(-0 829.566562 93.568)">应用读完成延迟 P99.99 ↓</text>
+   </g>
+  </g>
+  <g id="axes_4">
+   <g id="patch_17">
+    <path d="M 72.9 501.984 
+L 299.446875 501.984 
+L 299.446875 355.904 
+L 72.9 355.904 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_7">
+    <g id="xtick_7">
+     <g id="line2d_19">
+      <g>
+       <use xlink:href="#m4c330eda76" x="136.924117" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_31">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="136.924117" y="517.469938" transform="rotate(-0 136.924117 517.469938)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_20">
+      <g>
+       <use xlink:href="#m4c330eda76" x="235.422758" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_32">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="235.422758" y="517.068375" transform="rotate(-0 235.422758 517.068375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_8">
+    <g id="ytick_13">
+     <g id="line2d_21">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_33">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="505.412125" transform="rotate(-0 65.9 505.412125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_14">
+     <g id="line2d_22">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="456.687876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_34">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="460.116001" transform="rotate(-0 65.9 460.116001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_15">
+     <g id="line2d_23">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="411.391752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_35">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="414.819877" transform="rotate(-0 65.9 414.819877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_16">
+     <g id="line2d_24">
+      <g>
+       <use xlink:href="#mf709d158ce" x="72.9" y="366.095628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_36">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="65.9" y="369.523753" transform="rotate(-0 65.9 369.523753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_37">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="45.101562" y="428.944" transform="rotate(-90 45.101562 428.944)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_18">
+    <path d="M 72.9 501.984 
+L 72.9 355.904 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 72.9 501.984 
+L 299.446875 501.984 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_20">
+    <path d="M 111.31447 501.984 
+L 162.533764 501.984 
+L 162.533764 388.74369 
+L 111.31447 388.74369 
+z
+" clip-path="url(#p29b0d0ed44)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_21">
+    <path d="M 209.813111 501.984 
+L 261.032405 501.984 
+L 261.032405 494.940255 
+L 209.813111 494.940255 
+z
+" clip-path="url(#p29b0d0ed44)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_38">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="136.924117" y="376.916659" transform="rotate(-0 136.924117 376.916659)">1.000</text>
+   </g>
+   <g id="text_39">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="235.422758" y="483.113224" transform="rotate(-0 235.422758 483.113224)">0.062</text>
+   </g>
+   <g id="text_40">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="186.173437" y="341.904" transform="rotate(-0 186.173437 341.904)">应用写完成延迟 P99 ↓</text>
+   </g>
+  </g>
+  <g id="axes_5">
+   <g id="patch_22">
+    <path d="M 394.596563 501.984 
+L 621.143437 501.984 
+L 621.143437 355.904 
+L 394.596563 355.904 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_9">
+    <g id="xtick_9">
+     <g id="line2d_25">
+      <g>
+       <use xlink:href="#m4c330eda76" x="458.620679" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_41">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="458.620679" y="517.469938" transform="rotate(-0 458.620679 517.469938)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_10">
+     <g id="line2d_26">
+      <g>
+       <use xlink:href="#m4c330eda76" x="557.119321" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_42">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="557.119321" y="517.068375" transform="rotate(-0 557.119321 517.068375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_10">
+    <g id="ytick_17">
+     <g id="line2d_27">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_43">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="505.412125" transform="rotate(-0 387.596563 505.412125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_18">
+     <g id="line2d_28">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="456.687876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_44">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="460.116001" transform="rotate(-0 387.596563 460.116001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_19">
+     <g id="line2d_29">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="411.391752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_45">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="414.819877" transform="rotate(-0 387.596563 414.819877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_20">
+     <g id="line2d_30">
+      <g>
+       <use xlink:href="#mf709d158ce" x="394.596563" y="366.095628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_46">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="387.596563" y="369.523753" transform="rotate(-0 387.596563 369.523753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_47">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="366.798125" y="428.944" transform="rotate(-90 366.798125 428.944)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_23">
+    <path d="M 394.596563 501.984 
+L 394.596563 355.904 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_24">
+    <path d="M 394.596563 501.984 
+L 621.143437 501.984 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_25">
+    <path d="M 433.011033 501.984 
+L 484.230326 501.984 
+L 484.230326 388.74369 
+L 433.011033 388.74369 
+z
+" clip-path="url(#p3b2b483ef7)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_26">
+    <path d="M 531.509674 501.984 
+L 582.728967 501.984 
+L 582.728967 493.605705 
+L 531.509674 493.605705 
+z
+" clip-path="url(#p3b2b483ef7)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_48">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="458.620679" y="376.916659" transform="rotate(-0 458.620679 376.916659)">1.000</text>
+   </g>
+   <g id="text_49">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="557.119321" y="481.778674" transform="rotate(-0 557.119321 481.778674)">0.074</text>
+   </g>
+   <g id="text_50">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="507.87" y="341.904" transform="rotate(-0 507.87 341.904)">应用写完成延迟 P99.9 ↓</text>
+   </g>
+  </g>
+  <g id="axes_6">
+   <g id="patch_27">
+    <path d="M 716.293125 501.984 
+L 942.84 501.984 
+L 942.84 355.904 
+L 716.293125 355.904 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_11">
+    <g id="xtick_11">
+     <g id="line2d_31">
+      <g>
+       <use xlink:href="#m4c330eda76" x="780.317242" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_51">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="780.317242" y="517.469938" transform="rotate(-0 780.317242 517.469938)">普通放置</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_32">
+      <g>
+       <use xlink:href="#m4c330eda76" x="878.815883" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_52">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="878.815883" y="517.068375" transform="rotate(-0 878.815883 517.068375)">协同放置</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_12">
+    <g id="ytick_21">
+     <g id="line2d_33">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="501.984" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_53">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="505.412125" transform="rotate(-0 709.293125 505.412125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_22">
+     <g id="line2d_34">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="456.687876" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_54">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="460.116001" transform="rotate(-0 709.293125 460.116001)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_23">
+     <g id="line2d_35">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="411.391752" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_55">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="414.819877" transform="rotate(-0 709.293125 414.819877)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_24">
+     <g id="line2d_36">
+      <g>
+       <use xlink:href="#mf709d158ce" x="716.293125" y="366.095628" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_56">
+      <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: end" x="709.293125" y="369.523753" transform="rotate(-0 709.293125 369.523753)">1.2</text>
+     </g>
+    </g>
+    <g id="text_57">
+     <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="688.494687" y="428.944" transform="rotate(-90 688.494687 428.944)">相对值（普通Greedy＝1）</text>
+    </g>
+   </g>
+   <g id="patch_28">
+    <path d="M 716.293125 501.984 
+L 716.293125 355.904 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_29">
+    <path d="M 716.293125 501.984 
+L 942.84 501.984 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_30">
+    <path d="M 754.707595 501.984 
+L 805.926889 501.984 
+L 805.926889 388.74369 
+L 754.707595 388.74369 
+z
+" clip-path="url(#pe3c7d16458)" style="fill: #8393a8; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_31">
+    <path d="M 853.206236 501.984 
+L 904.42553 501.984 
+L 904.42553 493.412763 
+L 853.206236 493.412763 
+z
+" clip-path="url(#pe3c7d16458)" style="fill: #27858a; stroke: #ffffff; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_58">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="780.317242" y="376.916659" transform="rotate(-0 780.317242 376.916659)">1.000</text>
+   </g>
+   <g id="text_59">
+    <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="878.815883" y="481.585732" transform="rotate(-0 878.815883 481.585732)">0.076</text>
+   </g>
+   <g id="text_60">
+    <text style="font-size: 12px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="829.566562" y="341.904" transform="rotate(-0 829.566562 341.904)">应用写完成延迟 P99.99 ↓</text>
+   </g>
+  </g>
+  <g id="text_61">
+   <text style="font-size: 18px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="486" y="36.421312" transform="rotate(-0 486 36.421312)">应用长尾延迟｜协同放置 / 普通放置Greedy</text>
+  </g>
+  <g id="text_62">
+   <text style="font-size: 11px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: middle" x="486" y="53.784" transform="rotate(-0 486 53.784)">普通放置K=0＋Greedy  vs  协同放置K=1＋Greedy；每组一次真实运行</text>
+  </g>
+  <g id="text_63">
+   <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: start" x="72.9" y="552.78" transform="rotate(-0 72.9 552.78)">8 GiB；Zone 128 MiB；Open/Active＝8/12；RR＝1024；GC＝20%；缓存和WAL关闭。</text>
+  </g>
+  <g id="text_64">
+   <text style="font-size: 10px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: start" x="72.9" y="571.9032" transform="rotate(-0 72.9 571.9032)">应用延迟包含排队与批确认；队列4096、每2048写同步Flush。↑越高越好，↓越低越好。</text>
+  </g>
+  <g id="text_65">
+   <text style="font-size: 9px; font-family: 'WenQuanYi Zen Hei', 'DejaVu Sans', sans-serif; text-anchor: start" x="72.9" y="588.636" transform="rotate(-0 72.9 588.636)">单对受控实验，无独立重复误差条；Reset是Zone命令计数，不作为实测物理Block擦除次数。</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pa1448ee241">
+   <rect x="72.9" y="107.568" width="226.546875" height="146.08"/>
+  </clipPath>
+  <clipPath id="pe40481fcf9">
+   <rect x="394.596563" y="107.568" width="226.546875" height="146.08"/>
+  </clipPath>
+  <clipPath id="p0daaf737c3">
+   <rect x="716.293125" y="107.568" width="226.546875" height="146.08"/>
+  </clipPath>
+  <clipPath id="p29b0d0ed44">
+   <rect x="72.9" y="355.904" width="226.546875" height="146.08"/>
+  </clipPath>
+  <clipPath id="p3b2b483ef7">
+   <rect x="394.596563" y="355.904" width="226.546875" height="146.08"/>
+  </clipPath>
+  <clipPath id="pe3c7d16458">
+   <rect x="716.293125" y="355.904" width="226.546875" height="146.08"/>
+  </clipPath>
+ </defs>
+</svg>

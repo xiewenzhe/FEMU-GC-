@@ -1,0 +1,8 @@
+{
+  "来源": "/home/data/xwz/rrzc-baselines/joint-controlled-integrated-pool-v2-20261104-results/完整实验分析/完整对照核验.json",
+  "输入SHA256": "ebfd62c41697b95bfb0be42b29069f8a30249409d3a3923d6e0ee660028760ca",
+  "绘图器SHA256": "b6056e10d3f062c713c5327821f4e0f273ab765f78e82415ce9a62a29de21e99",
+  "公式": "每次机制值除以对应Greedy值；零基线不造比值",
+  "机制重复完全相同": true,
+  "物理Block擦除": "未直接采集，不作实测图"
+}

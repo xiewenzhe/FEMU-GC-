@@ -1,0 +1,6 @@
+{
+  "结果": "/home/data/xwz/rrzc-baselines/joint-controlled-colocation-credit-v2-20261029-results/抵扣校准核验.json",
+  "结果SHA256": "e6f6c308391546c1f5e8ef7d04d195832ca0d292c9c014d089127fc276d8a087",
+  "绘图源码SHA256": "e929631e3461aee9eed5117edeb0f9be30aafe0fb66294101217745f4371db29",
+  "边界": "显式D退役的受控ZenFS因果实验；标签不提供D的未来；原模型冻结；不是正常并发或应用性能"
+}

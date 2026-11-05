@@ -1,0 +1,19 @@
+{
+  "输入SHA256": {
+    "/home/data/xwz/rrzc-baselines/joint-dbbench8-parallel-v2-20261023-results/full-hot-配对核验.json": "01bd18ee44944475ee33565718c209627b8022de0f5be9956d16d61469492710",
+    "/home/data/xwz/rrzc-baselines/joint-dbbench8-parallel-v2-20261023-results/full-mixed95-配对核验.json": "a21ac1c51d65e5055cfefc9eba7a78dbe8e14bcc3335f0e1434bc32c3d9d02c2",
+    "/home/data/xwz/rrzc-baselines/joint-dbbench8-parallel-v2-20261023-results/full-mixed50-配对核验.json": "0382ef7eab10877c2e9c906df626e4335f095ad22165b1d5514866fac8129c89"
+  },
+  "绘图器SHA256": "651946309b189ca55406e20c523315e2a66512298226f814504f80981013f53b",
+  "公式": "模型值/space基线值；正基线下基线=1；吞吐方向不反转",
+  "基线": "本轮空间对照，非stock Greedy；没有补跑或替换基线",
+  "零基线": "比例不适用，保留两组原始值及差值；不作0/0=1或引入epsilon",
+  "缺失": "hot没有原生合并写直方图，留空不补零",
+  "原始文件保留": true,
+  "图表": [
+    "维护与吞吐归一化",
+    "READ延迟归一化",
+    "WRITE延迟归一化"
+  ],
+  "限制": "数据来自已验收真实配对；归一化不消除并行干扰或证明因果关系"
+}

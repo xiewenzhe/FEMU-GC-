@@ -1,0 +1,33 @@
+{
+  "原因": "原PDF中文字体已嵌入且本地渲染正常；用户预览乱码，具体预览器根因尚未确认。",
+  "处理": "汇总PDF各页嵌入已有300dpi PNG，消除中文字体依赖；保留修复前向量PDF及原SVG。",
+  "数据变化": false,
+  "限制": "兼容版文字不可选中编辑；编辑使用原SVG或向量备份。",
+  "源码SHA256": "e7739a72a893d4523669a7233264eac50cdb26e5e8e6301a6797edb7def3e367",
+  "文件": [
+    {
+      "文件": "research/rrzc/figures/end-to-end-v1-20261105/原始数值/全部柱状图.pdf",
+      "修复前SHA256": "1e0112eb4d10ce3b36978094832ac94efde0707a174213eabba28e654675cce6",
+      "修复后SHA256": "ba41fbb72f0579cbf0ce7a48c5795a1783bfbf411e91c01c16f40178f2c5bf02",
+      "原向量备份": "research/rrzc/figures/end-to-end-v1-20261105/字体兼容修复/原始数值-原向量版.pdf",
+      "页面PNG_SHA256": {
+        "总体结果.png": "9eeee662d0ce9ca9093239a80810bceb9bef0a82e021b98de1a83ba458750b58",
+        "应用长尾延迟.png": "cabc32776d22d55a3dc236daa5d9bf6d034dfbb84eba6aa47fef2c81e9caf182",
+        "维护与空间.png": "1289f91ecf6a9ce07b87fb83b88ff6f2feebac55031d898e2087949d626da267",
+        "API响应延迟.png": "6a416649ef902ed45debcefa113a0aeb37d6d05f7d79d7c08dac291274018577"
+      }
+    },
+    {
+      "文件": "research/rrzc/figures/end-to-end-v1-20261105/归一化/全部柱状图.pdf",
+      "修复前SHA256": "86a5f7b1d6a0d434a31c2d307cde66a7e525a98ba604891be6a149a29603e453",
+      "修复后SHA256": "0d6bae46ae3012c1eb47278b6fde170f38f18dc436900c7b75bafa6a937939f0",
+      "原向量备份": "research/rrzc/figures/end-to-end-v1-20261105/字体兼容修复/归一化-原向量版.pdf",
+      "页面PNG_SHA256": {
+        "总体结果.png": "727634d1e30569e0615c2c6d40b8c3b0f887c69453ecceb533eb80e25484a6b8",
+        "应用长尾延迟.png": "bb61a8f7cc7545e28b9f190230820372f58a0dffc01dd583e875960027009172",
+        "维护与空间.png": "5436744a25395239cb8d3f8aa0c1d25fab60fee66811bac0cd2e76b1eb4fddbe",
+        "API响应延迟.png": "b6186dc97453a2c6d99648499267ccc58c168a8700156b2e69634eaff07c1886"
+      }
+    }
+  ]
+}

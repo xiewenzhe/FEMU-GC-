@@ -1,0 +1,23 @@
+{
+  "pdf": "research/rrzc/figures/end-to-end-v1-20261105/归一化/全部柱状图.pdf",
+  "auditable": false,
+  "verdict": "NOT AUDITABLE",
+  "page_count": 4,
+  "visible_text_box_count": 0,
+  "text_trace_count": 0,
+  "stroke_path_count": 0,
+  "filled_region_count": 4,
+  "image_region_count": 4,
+  "summary": {
+    "fail": 0,
+    "warn": 0,
+    "contained_fill_overlays": 0,
+    "contained_image_overlays": 0
+  },
+  "thresholds": {
+    "text_inset_pt": 0.6,
+    "min_overlap_ratio": 0.05,
+    "clipping_tolerance_pt": 0.5
+  },
+  "findings": []
+}

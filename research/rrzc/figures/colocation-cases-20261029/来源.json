@@ -1,0 +1,6 @@
+{
+  "结果": "/home/data/xwz/FEMU（GC）/FEMU/research/rrzc/results/colocation-pool-20261029/三情形复核/三情形核验.json",
+  "结果SHA256": "75493340faaa9fbb57e293dcd6da1727e7c3d267d81d3b15f54d605db5b211dc",
+  "绘图源码SHA256": "e4b428c3d2e9cc5b6bc5aa1359fd9a61c642f51bf32526a02fbb786098a06507",
+  "说明": "同一Greedy，显式受控分类和检查边界，文件级机制实验；不代表在线识别、模型选区或正常并发性能收益"
+}

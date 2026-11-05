@@ -1,0 +1,1052 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="856.29pt" height="571.685pt" viewBox="0 0 856.29 571.685" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-24T00:20:41.521226</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.9.3, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 571.685 
+L 856.29 571.685 
+L 856.29 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 42.74375 285.420125 
+L 422.49 285.420125 
+L 422.49 122.27775 
+L 42.74375 122.27775 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <defs>
+       <path id="m3db8835163" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m3db8835163" x="117.542254" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="117.542254" y="300.651375" transform="rotate(-0 117.542254 300.651375)">偏斜读＋并发写</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_2">
+      <g>
+       <use xlink:href="#m3db8835163" x="232.616875" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="232.616875" y="300.632625" transform="rotate(-0 232.616875 300.632625)">均匀95读/5写</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_3">
+      <g>
+       <use xlink:href="#m3db8835163" x="347.691496" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="347.691496" y="300.632625" transform="rotate(-0 347.691496 300.632625)">均匀50读/50写</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_4">
+      <path d="M 42.74375 285.420125 
+L 422.49 285.420125 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_5">
+      <defs>
+       <path id="mae0decb7f8" d="M 0 0 
+L -3.5 0 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="288.84825" transform="rotate(-0 35.74375 288.84825)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_6">
+      <path d="M 42.74375 261.750533 
+L 422.49 261.750533 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_7">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="261.750533" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="265.178658" transform="rotate(-0 35.74375 265.178658)">0.5</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_8">
+      <path d="M 42.74375 238.080941 
+L 422.49 238.080941 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_9">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="238.080941" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="241.509066" transform="rotate(-0 35.74375 241.509066)">1.0</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_10">
+      <path d="M 42.74375 214.411349 
+L 422.49 214.411349 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_11">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="214.411349" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_7">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="217.839474" transform="rotate(-0 35.74375 217.839474)">1.5</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_12">
+      <path d="M 42.74375 190.741757 
+L 422.49 190.741757 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_13">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="190.741757" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="194.169882" transform="rotate(-0 35.74375 194.169882)">2.0</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_14">
+      <path d="M 42.74375 167.072165 
+L 422.49 167.072165 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_15">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="167.072165" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="170.50029" transform="rotate(-0 35.74375 170.50029)">2.5</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_16">
+      <path d="M 42.74375 143.402572 
+L 422.49 143.402572 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_17">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="143.402572" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="146.830697" transform="rotate(-0 35.74375 146.830697)">3.0</text>
+     </g>
+    </g>
+    <g id="text_11">
+     <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="15.090625" y="203.848937" transform="rotate(-90 15.090625 203.848937)">相对基线比值</text>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 0 0 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 191.190011 285.420125 
+L 232.616875 285.420125 
+L 232.616875 238.080941 
+L 191.190011 238.080941 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 306.264633 285.420125 
+L 347.691496 285.420125 
+L 347.691496 238.080941 
+L 306.264633 238.080941 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 0 0 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 232.616875 285.420125 
+L 274.043739 285.420125 
+L 274.043739 238.334523 
+L 232.616875 238.334523 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 347.691496 285.420125 
+L 389.11836 285.420125 
+L 389.11836 159.92599 
+L 347.691496 159.92599 
+z
+" clip-path="url(#pa572b4aac1)" style="fill: #ee7733"/>
+   </g>
+   <g id="line2d_18">
+    <path d="M 42.74375 238.080941 
+L 422.49 238.080941 
+" clip-path="url(#pa572b4aac1)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #666666; stroke-width: 0.8"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 42.74375 285.420125 
+L 42.74375 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 422.49 285.420125 
+L 422.49 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 42.74375 285.420125 
+L 422.49 285.420125 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 42.74375 122.27775 
+L 422.49 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_12">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="211.903443" y="233.752191" transform="rotate(-0 211.903443 233.752191)">1.000</text>
+   </g>
+   <g id="text_13">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="326.978064" y="233.752191" transform="rotate(-0 326.978064 233.752191)">1.000</text>
+   </g>
+   <g id="text_14">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="253.330307" y="234.005773" transform="rotate(-0 253.330307 234.005773)">0.995</text>
+   </g>
+   <g id="text_15">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="368.404928" y="155.59724" transform="rotate(-0 368.404928 155.59724)">2.651</text>
+   </g>
+   <g id="text_16">
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(101.542254 270.01918)">缺少统计</text>
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(105.542254 278.89443)">不适用</text>
+   </g>
+   <g id="text_17">
+    <text style="font: 12px 'WenQuanYi Zen Hei'; text-anchor: middle" x="232.616875" y="116.27775" transform="rotate(-0 232.616875 116.27775)">平均（越低越好）</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_13">
+     <path d="M 187.816875 152.51525 
+L 277.416875 152.51525 
+Q 279.016875 152.51525 279.016875 150.91525 
+L 279.016875 127.87775 
+Q 279.016875 126.27775 277.416875 126.27775 
+L 187.816875 126.27775 
+Q 186.216875 126.27775 186.216875 127.87775 
+L 186.216875 150.91525 
+Q 186.216875 152.51525 187.816875 152.51525 
+z
+" style="fill: #ffffff; opacity: 0.8; stroke: #cccccc; stroke-linejoin: miter"/>
+    </g>
+    <g id="patch_14">
+     <path d="M 189.416875 136.22025 
+L 205.416875 136.22025 
+L 205.416875 130.62025 
+L 189.416875 130.62025 
+z
+" style="fill: #4477aa"/>
+    </g>
+    <g id="text_18">
+     <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: start" x="211.816875" y="136.22025" transform="rotate(-0 211.816875 136.22025)">基线（空间对照）</text>
+    </g>
+    <g id="patch_15">
+     <path d="M 189.416875 147.9865 
+L 205.416875 147.9865 
+L 205.416875 142.3865 
+L 189.416875 142.3865 
+z
+" style="fill: #ee7733"/>
+    </g>
+    <g id="text_19">
+     <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: start" x="211.816875" y="147.9865" transform="rotate(-0 211.816875 147.9865)">联合成本模型</text>
+    </g>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_16">
+    <path d="M 469.34375 285.420125 
+L 849.09 285.420125 
+L 849.09 122.27775 
+L 469.34375 122.27775 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_4">
+     <g id="line2d_19">
+      <g>
+       <use xlink:href="#m3db8835163" x="544.142254" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_20">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="544.142254" y="300.651375" transform="rotate(-0 544.142254 300.651375)">偏斜读＋并发写</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_20">
+      <g>
+       <use xlink:href="#m3db8835163" x="659.216875" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_21">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="659.216875" y="300.632625" transform="rotate(-0 659.216875 300.632625)">均匀95读/5写</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_21">
+      <g>
+       <use xlink:href="#m3db8835163" x="774.291496" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_22">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="774.291496" y="300.632625" transform="rotate(-0 774.291496 300.632625)">均匀50读/50写</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_8">
+     <g id="line2d_22">
+      <path d="M 469.34375 285.420125 
+L 849.09 285.420125 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_23">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="285.420125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_23">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="288.84825" transform="rotate(-0 462.34375 288.84825)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_24">
+      <path d="M 469.34375 260.321298 
+L 849.09 260.321298 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_25">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="260.321298" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_24">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="263.749423" transform="rotate(-0 462.34375 263.749423)">0.2</text>
+     </g>
+    </g>
+    <g id="ytick_10">
+     <g id="line2d_26">
+      <path d="M 469.34375 235.222471 
+L 849.09 235.222471 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_27">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="235.222471" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_25">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="238.650596" transform="rotate(-0 462.34375 238.650596)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_11">
+     <g id="line2d_28">
+      <path d="M 469.34375 210.123644 
+L 849.09 210.123644 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_29">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="210.123644" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_26">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="213.551769" transform="rotate(-0 462.34375 213.551769)">0.6</text>
+     </g>
+    </g>
+    <g id="ytick_12">
+     <g id="line2d_30">
+      <path d="M 469.34375 185.024817 
+L 849.09 185.024817 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_31">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="185.024817" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_27">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="188.452942" transform="rotate(-0 462.34375 188.452942)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_13">
+     <g id="line2d_32">
+      <path d="M 469.34375 159.92599 
+L 849.09 159.92599 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_33">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="159.92599" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_28">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="163.354115" transform="rotate(-0 462.34375 163.354115)">1.0</text>
+     </g>
+    </g>
+    <g id="ytick_14">
+     <g id="line2d_34">
+      <path d="M 469.34375 134.827163 
+L 849.09 134.827163 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_35">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="134.827163" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_29">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="138.255288" transform="rotate(-0 462.34375 138.255288)">1.2</text>
+     </g>
+    </g>
+    <g id="text_30">
+     <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="441.690625" y="203.848937" transform="rotate(-90 441.690625 203.848937)">相对基线比值</text>
+    </g>
+   </g>
+   <g id="patch_17">
+    <path d="M 0 0 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_18">
+    <path d="M 617.790011 285.420125 
+L 659.216875 285.420125 
+L 659.216875 159.92599 
+L 617.790011 159.92599 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 732.864633 285.420125 
+L 774.291496 285.420125 
+L 774.291496 159.92599 
+L 732.864633 159.92599 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_20">
+    <path d="M 0 0 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_21">
+    <path d="M 659.216875 285.420125 
+L 700.643739 285.420125 
+L 700.643739 168.454718 
+L 659.216875 168.454718 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_22">
+    <path d="M 774.291496 285.420125 
+L 815.71836 285.420125 
+L 815.71836 160.595292 
+L 774.291496 160.595292 
+z
+" clip-path="url(#pd9ef2c4b32)" style="fill: #ee7733"/>
+   </g>
+   <g id="line2d_36">
+    <path d="M 469.34375 159.92599 
+L 849.09 159.92599 
+" clip-path="url(#pd9ef2c4b32)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #666666; stroke-width: 0.8"/>
+   </g>
+   <g id="patch_23">
+    <path d="M 469.34375 285.420125 
+L 469.34375 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_24">
+    <path d="M 849.09 285.420125 
+L 849.09 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_25">
+    <path d="M 469.34375 285.420125 
+L 849.09 285.420125 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_26">
+    <path d="M 469.34375 122.27775 
+L 849.09 122.27775 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_31">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="638.503443" y="155.59724" transform="rotate(-0 638.503443 155.59724)">1.000</text>
+   </g>
+   <g id="text_32">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="753.578064" y="155.59724" transform="rotate(-0 753.578064 155.59724)">1.000</text>
+   </g>
+   <g id="text_33">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="679.930307" y="164.125968" transform="rotate(-0 679.930307 164.125968)">0.932</text>
+   </g>
+   <g id="text_34">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="795.004928" y="156.266542" transform="rotate(-0 795.004928 156.266542)">0.995</text>
+   </g>
+   <g id="text_35">
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(528.142254 270.01918)">缺少统计</text>
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(532.142254 278.89443)">不适用</text>
+   </g>
+   <g id="text_36">
+    <text style="font: 12px 'WenQuanYi Zen Hei'; text-anchor: middle" x="659.216875" y="116.27775" transform="rotate(-0 659.216875 116.27775)">P99（越低越好）</text>
+   </g>
+  </g>
+  <g id="axes_3">
+   <g id="patch_27">
+    <path d="M 42.74375 492.14 
+L 422.49 492.14 
+L 422.49 328.997625 
+L 42.74375 328.997625 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_5">
+    <g id="xtick_7">
+     <g id="line2d_37">
+      <g>
+       <use xlink:href="#m3db8835163" x="117.542254" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_37">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="117.542254" y="507.37125" transform="rotate(-0 117.542254 507.37125)">偏斜读＋并发写</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_38">
+      <g>
+       <use xlink:href="#m3db8835163" x="232.616875" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_38">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="232.616875" y="507.3525" transform="rotate(-0 232.616875 507.3525)">均匀95读/5写</text>
+     </g>
+    </g>
+    <g id="xtick_9">
+     <g id="line2d_39">
+      <g>
+       <use xlink:href="#m3db8835163" x="347.691496" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_39">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="347.691496" y="507.3525" transform="rotate(-0 347.691496 507.3525)">均匀50读/50写</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_6">
+    <g id="ytick_15">
+     <g id="line2d_40">
+      <path d="M 42.74375 492.14 
+L 422.49 492.14 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_41">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_40">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="495.568125" transform="rotate(-0 35.74375 495.568125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_16">
+     <g id="line2d_42">
+      <path d="M 42.74375 467.179079 
+L 422.49 467.179079 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_43">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="467.179079" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_41">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="470.607204" transform="rotate(-0 35.74375 470.607204)">0.2</text>
+     </g>
+    </g>
+    <g id="ytick_17">
+     <g id="line2d_44">
+      <path d="M 42.74375 442.218157 
+L 422.49 442.218157 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_45">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="442.218157" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_42">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="445.646282" transform="rotate(-0 35.74375 445.646282)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_18">
+     <g id="line2d_46">
+      <path d="M 42.74375 417.257236 
+L 422.49 417.257236 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_47">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="417.257236" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_43">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="420.685361" transform="rotate(-0 35.74375 420.685361)">0.6</text>
+     </g>
+    </g>
+    <g id="ytick_19">
+     <g id="line2d_48">
+      <path d="M 42.74375 392.296315 
+L 422.49 392.296315 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_49">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="392.296315" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_44">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="395.72444" transform="rotate(-0 35.74375 395.72444)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_20">
+     <g id="line2d_50">
+      <path d="M 42.74375 367.335394 
+L 422.49 367.335394 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_51">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="367.335394" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_45">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="370.763519" transform="rotate(-0 35.74375 370.763519)">1.0</text>
+     </g>
+    </g>
+    <g id="ytick_21">
+     <g id="line2d_52">
+      <path d="M 42.74375 342.374472 
+L 422.49 342.374472 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_53">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="42.74375" y="342.374472" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_46">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="35.74375" y="345.802597" transform="rotate(-0 35.74375 345.802597)">1.2</text>
+     </g>
+    </g>
+    <g id="text_47">
+     <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="15.090625" y="410.568812" transform="rotate(-90 15.090625 410.568812)">相对基线比值</text>
+    </g>
+   </g>
+   <g id="patch_28">
+    <path d="M 0 0 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_29">
+    <path d="M 191.190011 492.14 
+L 232.616875 492.14 
+L 232.616875 367.335394 
+L 191.190011 367.335394 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_30">
+    <path d="M 306.264633 492.14 
+L 347.691496 492.14 
+L 347.691496 367.335394 
+L 306.264633 367.335394 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_31">
+    <path d="M 0 0 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_32">
+    <path d="M 232.616875 492.14 
+L 274.043739 492.14 
+L 274.043739 375.292444 
+L 232.616875 375.292444 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_33">
+    <path d="M 347.691496 492.14 
+L 389.11836 492.14 
+L 389.11836 366.645865 
+L 347.691496 366.645865 
+z
+" clip-path="url(#p0c2c1342e6)" style="fill: #ee7733"/>
+   </g>
+   <g id="line2d_54">
+    <path d="M 42.74375 367.335394 
+L 422.49 367.335394 
+" clip-path="url(#p0c2c1342e6)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #666666; stroke-width: 0.8"/>
+   </g>
+   <g id="patch_34">
+    <path d="M 42.74375 492.14 
+L 42.74375 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_35">
+    <path d="M 422.49 492.14 
+L 422.49 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_36">
+    <path d="M 42.74375 492.14 
+L 422.49 492.14 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_37">
+    <path d="M 42.74375 328.997625 
+L 422.49 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_48">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="211.903443" y="363.006644" transform="rotate(-0 211.903443 363.006644)">1.000</text>
+   </g>
+   <g id="text_49">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="326.978064" y="363.006644" transform="rotate(-0 326.978064 363.006644)">1.000</text>
+   </g>
+   <g id="text_50">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="253.330307" y="370.963694" transform="rotate(-0 253.330307 370.963694)">0.936</text>
+   </g>
+   <g id="text_51">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="368.404928" y="362.317115" transform="rotate(-0 368.404928 362.317115)">1.006</text>
+   </g>
+   <g id="text_52">
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(101.542254 476.739055)">缺少统计</text>
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(105.542254 485.614305)">不适用</text>
+   </g>
+   <g id="text_53">
+    <text style="font: 12px 'WenQuanYi Zen Hei'; text-anchor: middle" x="232.616875" y="322.997625" transform="rotate(-0 232.616875 322.997625)">P99.9（越低越好）</text>
+   </g>
+  </g>
+  <g id="axes_4">
+   <g id="patch_38">
+    <path d="M 469.34375 492.14 
+L 849.09 492.14 
+L 849.09 328.997625 
+L 469.34375 328.997625 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_7">
+    <g id="xtick_10">
+     <g id="line2d_55">
+      <g>
+       <use xlink:href="#m3db8835163" x="544.142254" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_54">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="544.142254" y="507.37125" transform="rotate(-0 544.142254 507.37125)">偏斜读＋并发写</text>
+     </g>
+    </g>
+    <g id="xtick_11">
+     <g id="line2d_56">
+      <g>
+       <use xlink:href="#m3db8835163" x="659.216875" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_55">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="659.216875" y="507.3525" transform="rotate(-0 659.216875 507.3525)">均匀95读/5写</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_57">
+      <g>
+       <use xlink:href="#m3db8835163" x="774.291496" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_56">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="774.291496" y="507.3525" transform="rotate(-0 774.291496 507.3525)">均匀50读/50写</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_8">
+    <g id="ytick_22">
+     <g id="line2d_58">
+      <path d="M 469.34375 492.14 
+L 849.09 492.14 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_59">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="492.14" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_57">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="495.568125" transform="rotate(-0 462.34375 495.568125)">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_23">
+     <g id="line2d_60">
+      <path d="M 469.34375 467.068625 
+L 849.09 467.068625 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_61">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="467.068625" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_58">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="470.49675" transform="rotate(-0 462.34375 470.49675)">0.2</text>
+     </g>
+    </g>
+    <g id="ytick_24">
+     <g id="line2d_62">
+      <path d="M 469.34375 441.99725 
+L 849.09 441.99725 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_63">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="441.99725" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_59">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="445.425375" transform="rotate(-0 462.34375 445.425375)">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_25">
+     <g id="line2d_64">
+      <path d="M 469.34375 416.925875 
+L 849.09 416.925875 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_65">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="416.925875" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_60">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="420.354" transform="rotate(-0 462.34375 420.354)">0.6</text>
+     </g>
+    </g>
+    <g id="ytick_26">
+     <g id="line2d_66">
+      <path d="M 469.34375 391.8545 
+L 849.09 391.8545 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_67">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="391.8545" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_61">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="395.282625" transform="rotate(-0 462.34375 395.282625)">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_27">
+     <g id="line2d_68">
+      <path d="M 469.34375 366.783125 
+L 849.09 366.783125 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_69">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="366.783125" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_62">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="370.21125" transform="rotate(-0 462.34375 370.21125)">1.0</text>
+     </g>
+    </g>
+    <g id="ytick_28">
+     <g id="line2d_70">
+      <path d="M 469.34375 341.71175 
+L 849.09 341.71175 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.2; stroke-width: 0.8; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_71">
+      <g>
+       <use xlink:href="#mae0decb7f8" x="469.34375" y="341.71175" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_63">
+      <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: end" x="462.34375" y="345.139875" transform="rotate(-0 462.34375 345.139875)">1.2</text>
+     </g>
+    </g>
+    <g id="text_64">
+     <text style="font: 10px 'WenQuanYi Zen Hei'; text-anchor: middle" x="441.690625" y="410.568812" transform="rotate(-90 441.690625 410.568812)">相对基线比值</text>
+    </g>
+   </g>
+   <g id="patch_39">
+    <path d="M 0 0 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_40">
+    <path d="M 617.790011 492.14 
+L 659.216875 492.14 
+L 659.216875 366.783125 
+L 617.790011 366.783125 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_41">
+    <path d="M 732.864633 492.14 
+L 774.291496 492.14 
+L 774.291496 366.783125 
+L 732.864633 366.783125 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #4477aa"/>
+   </g>
+   <g id="patch_42">
+    <path d="M 0 0 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_43">
+    <path d="M 659.216875 492.14 
+L 700.643739 492.14 
+L 700.643739 367.807546 
+L 659.216875 367.807546 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #ee7733"/>
+   </g>
+   <g id="patch_44">
+    <path d="M 774.291496 492.14 
+L 815.71836 492.14 
+L 815.71836 366.645865 
+L 774.291496 366.645865 
+z
+" clip-path="url(#pf391f9acba)" style="fill: #ee7733"/>
+   </g>
+   <g id="line2d_72">
+    <path d="M 469.34375 366.783125 
+L 849.09 366.783125 
+" clip-path="url(#pf391f9acba)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #666666; stroke-width: 0.8"/>
+   </g>
+   <g id="patch_45">
+    <path d="M 469.34375 492.14 
+L 469.34375 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_46">
+    <path d="M 849.09 492.14 
+L 849.09 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_47">
+    <path d="M 469.34375 492.14 
+L 849.09 492.14 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_48">
+    <path d="M 469.34375 328.997625 
+L 849.09 328.997625 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_65">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="638.503443" y="362.454375" transform="rotate(-0 638.503443 362.454375)">1.000</text>
+   </g>
+   <g id="text_66">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="753.578064" y="362.454375" transform="rotate(-0 753.578064 362.454375)">1.000</text>
+   </g>
+   <g id="text_67">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="679.930307" y="363.478796" transform="rotate(-0 679.930307 363.478796)">0.992</text>
+   </g>
+   <g id="text_68">
+    <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: middle" x="795.004928" y="362.317115" transform="rotate(-0 795.004928 362.317115)">1.001</text>
+   </g>
+   <g id="text_69">
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(528.142254 476.739055)">缺少统计</text>
+    <text style="font: 8px 'WenQuanYi Zen Hei'" transform="translate(532.142254 485.614305)">不适用</text>
+   </g>
+   <g id="text_70">
+    <text style="font: 12px 'WenQuanYi Zen Hei'; text-anchor: middle" x="659.216875" y="322.997625" transform="rotate(-0 659.216875 322.997625)">P99.99（越低越好）</text>
+   </g>
+  </g>
+  <g id="text_71">
+   <text style="font: 12px 'WenQuanYi Zen Hei'" transform="translate(381.342187 16.7025)">WRITE延迟归一化</text>
+   <text style="font: 12px 'WenQuanYi Zen Hei'" transform="translate(305.4975 30.269625)">模型值 ÷ 基线值；有效基线=1，未倒置吞吐量</text>
+  </g>
+  <g id="text_72">
+   <text style="font: 8px 'WenQuanYi Zen Hei'; text-anchor: start" x="13.17" y="563.04" transform="rotate(-0 13.17 563.04)">当前基线为空间控制，非stock Greedy；零基线/缺失不画比例。并行单轮结果不能证明模型因果收益。</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pa572b4aac1">
+   <rect x="42.74375" y="122.27775" width="379.74625" height="163.142375"/>
+  </clipPath>
+  <clipPath id="pd9ef2c4b32">
+   <rect x="469.34375" y="122.27775" width="379.74625" height="163.142375"/>
+  </clipPath>
+  <clipPath id="p0c2c1342e6">
+   <rect x="42.74375" y="328.997625" width="379.74625" height="163.142375"/>
+  </clipPath>
+  <clipPath id="pf391f9acba">
+   <rect x="469.34375" y="328.997625" width="379.74625" height="163.142375"/>
+  </clipPath>
+ </defs>
+</svg>
