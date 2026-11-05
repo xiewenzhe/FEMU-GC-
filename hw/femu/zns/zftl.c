@@ -1,6 +1,51 @@
 #include "zns.h"
+#include "qemu/log.h"
 
 //#define FEMU_DEBUG_ZFTL
+
+/* 仅诊断开关启用时记录稀疏事件，不记录每次NAND读取或改变完成状态。 */
+static bool zns_rr_event_trace_enabled(void)
+{
+    const char *enabled = getenv("FEMU_RR_EVENT_TRACE");
+
+    return enabled && !strcmp(enabled, "1");
+}
+
+static uint64_t zns_rr_trace_sequence(void)
+{
+    static uint64_t sequence;
+
+    return qatomic_fetch_inc(&sequence);
+}
+
+static void zns_rr_trace_threshold(struct zns_ssd *zns, NvmeRequest *req,
+                                   const struct ppa *ppa, uint64_t lpn,
+                                   uint64_t before, uint64_t after,
+                                   bool migration)
+{
+    uint32_t groups, zone, id;
+    uint64_t generation;
+
+    if (!zns_rr_event_trace_enabled()) {
+        return;
+    }
+    groups = zns->num_ch / zns->chnls_per_zone;
+    zone = ppa->g.blk * groups + ppa->g.ch / zns->chnls_per_zone;
+    id = ((ppa->g.ch % zns->chnls_per_zone) * zns->num_lun +
+          ppa->g.fc) * zns->num_plane + ppa->g.pl;
+    generation = zns->rr_history_enabled ? zns->rr_history[zone].generation : 0;
+    qemu_log("RR设备阈值事件：序号=%" PRIu64
+            "，宿主单调纳秒=%" PRId64 "，设备会话=%" PRIu64 "/%" PRIu64
+            "，Zone=%u，块=%u，PPA=%u/%u/%u/%u，代际=%" PRIu64
+            "，LPN=%" PRIu64 "，SQ=%u，CID=%u，搬迁=%d，原RC=%" PRIu64
+            "，现RC=%" PRIu64 "，阈值=%" PRIu64 "\n",
+            zns_rr_trace_sequence(), qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
+            zns->rr_session_hi, zns->rr_session_lo, zone, id,
+            (unsigned)ppa->g.ch, (unsigned)ppa->g.fc,
+            (unsigned)ppa->g.pl, (unsigned)ppa->g.blk, generation, lpn,
+            req->sq ? req->sq->sqid : UINT16_MAX, le16_to_cpu(req->cmd.cid),
+            migration, before, after, zns->rr_threshold);
+}
 
 
 static inline struct ppa get_maptbl_ent(struct zns_ssd *zns, uint64_t lpn)
@@ -172,8 +217,10 @@ static inline bool valid_ppa(struct zns_ssd *zns, struct ppa *ppa)
     int pg = ppa->g.pg;
     int sub_pg = ppa->g.spg;
 
-    if (ch >= 0 && ch < zns->num_ch && lun >= 0 && lun < zns->num_lun && pl >=
-        0 && pl < zns->num_plane && blk >= 0 && blk < zns->num_blk && pg>=0 && pg < zns->num_page && sub_pg >= 0 && sub_pg < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE)
+    if (ch >= 0 && ch < zns->num_ch && lun >= 0 && lun < zns->num_lun &&
+        pl >= 0 && pl < zns->num_plane && blk >= 0 && blk < zns->num_blk &&
+        pg >= 0 && pg < zns->num_page && sub_pg >= 0 &&
+        sub_pg < zns->page_size / LOGICAL_PAGE_SIZE)
         return true;
 
     return false;
@@ -411,6 +458,17 @@ uint64_t zns_zone_reset(struct zns_ssd *zns, uint32_t zone_idx,
     ftl_debug("Maximum erase latency: %lu ns (%.2f ms)\n", maxlat, maxlat / 1000000.0);
     ftl_debug("=== Zone Reset Finished ===\n\n");
 
+    if (zns_rr_event_trace_enabled()) {
+        /* 记录已执行的FTL清理路径；不是跨层原子快照，也不是完整L2P校验。 */
+        qemu_log("RR设备Reset事件：序号=%" PRIu64 "，宿主单调纳秒=%" PRId64
+                "，设备会话=%" PRIu64 "/%" PRIu64 "，Zone=%u，代际=%" PRIu64
+                "，擦除块数=%" PRIu64 "，RC清零路径完成=1，L2P失效路径完成=1\n",
+                zns_rr_trace_sequence(), qemu_clock_get_ns(QEMU_CLOCK_REALTIME), zns->rr_session_hi,
+                zns->rr_session_lo, zone_idx,
+                zns->rr_history_enabled ? zns->rr_history[zone_idx].generation : 0,
+                total_blocks_erased);
+    }
+
     return maxlat;
 }
 
@@ -438,8 +496,37 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
         srd.cmd = NAND_READ;
         srd.stime = req->stime;
 
+        const bool migration = req->cmd.opcode == FEMU_ZNS_RR_READ &&
+            le32_to_cpu(req->cmd.cdw13) == (FEMU_ZNS_RR_MARKER | 1);
+        enum FemuRrReadAction action = FEMU_RR_COUNT;
+        if (zns->rr_strict) {
+            action = femu_rr_read_action(get_blk(zns, &ppa)->read_count,
+                                        zns->rr_threshold, migration);
+            if (action == FEMU_RR_BLOCK) {
+                qatomic_inc(&zns->rr_blocked_reads);
+                req->status = FEMU_ZNS_RR_PENDING | NVME_DNR;
+                return maxlat;
+            }
+            qatomic_inc(&zns->rr_actual_reads);
+            if (action == FEMU_RR_SELF_REFRESH) {
+                qatomic_inc(&zns->rr_self_reads);
+            } else {
+                qatomic_inc(&zns->rr_counted_reads);
+                if (migration) {
+                    qatomic_inc(&zns->rr_other_migration_reads);
+                }
+                if (action == FEMU_RR_TRIGGER) {
+                    qatomic_inc(&zns->rr_trigger_events);
+                    req->cqe.n.result = cpu_to_le32(1);
+                }
+                uint64_t next = get_blk(zns, &ppa)->read_count + 1;
+                if (next > zns->rr_peak_count) {
+                    qatomic_set(&zns->rr_peak_count, next);
+                }
+            }
+        }
         sublat = zns_advance_status(zns, &ppa, &srd);
-        if (zns->rr_threshold) {
+        if (zns->rr_threshold && action != FEMU_RR_SELF_REFRESH) {
             if (zns->rr_history_enabled) {
                 uint32_t groups = zns->num_ch / zns->chnls_per_zone;
                 uint32_t group = ppa.g.ch / zns->chnls_per_zone;
@@ -457,6 +544,11 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
             } else {
                 qatomic_inc(&get_blk(zns, &ppa)->read_count);
             }
+        }
+        if (action == FEMU_RR_TRIGGER) {
+            uint64_t after = qatomic_read(&get_blk(zns, &ppa)->read_count);
+            zns_rr_trace_threshold(zns, req, &ppa, lpn, after - 1, after,
+                                   migration);
         }
         ftl_debug("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
@@ -497,7 +589,8 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                 }
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
                 get_blk(zns,&ppa)->page_wp++;
-                for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
+                for (subpage = 0;
+                     subpage < zns->page_size / LOGICAL_PAGE_SIZE; subpage++)
                 {
                     if(i+subpage >= zns->cache.write_cache[wcidx].used)
                     {
@@ -514,7 +607,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     set_maptbl_ent(zns, lpn, &ppa);
                     // ftl_debug("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
                 }
-                i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
+                i += zns->page_size / LOGICAL_PAGE_SIZE;
             }
             //FIXME Misao: identify padding page
             if(ppa.g.V)
@@ -548,7 +641,21 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
     NvmeNamespace *ns = req->ns;
     uint64_t req_zone = ns->zone_size_log2 > 0 ?
         req->slba >> ns->zone_size_log2 : req->slba / ns->zone_size;
-    int wcidx = zns_get_wcidx(zns, req_zone);
+    int wcidx;
+
+    /*
+     * 顺序区的连续512B写入可能由Linux在4KiB页内拆开。同一逻辑页只在
+     * 首个扇区到达时登记一次；后续片段的数据已由原后端写入，不能再次
+     * 消耗物理页或推进映射。随机写的Conventional/ZRWA路径保留原行为。
+     */
+    if (req_zone >= ns->num_conv_zones &&
+        !(ns->zone_array[req_zone].d.za & NVME_ZA_ZRWA_VALID)) {
+        start_lpn = DIV_ROUND_UP(lba, secs_per_pg);
+        if (start_lpn > end_lpn) {
+            return SRAM_WRITE_LATENCY_NS;
+        }
+    }
+    wcidx = zns_get_wcidx(zns, req_zone);
 
     if(wcidx==-1)
     {
@@ -653,6 +760,7 @@ uint64_t zns_ftl_process_req(NvmeNamespace *ns, NvmeRequest *req)
         lat = zns_write(zns, req);
         break;
     case NVME_CMD_READ:
+    case FEMU_ZNS_RR_READ:
         lat = zns_read(zns, req);
         break;
     case NVME_CMD_DSM:

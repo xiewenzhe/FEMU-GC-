@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../../hw/femu/zns/rr-history.h"
+#include "../../../hw/femu/zns/rr-strict.h"
 
 #define QEMU_PACKED __attribute__((packed))
 #define QEMU_BUILD_BUG_ON(x) _Static_assert(!(x), "协议结构长度异常")
@@ -17,10 +18,14 @@
 #define LOGICAL_PAGE_SIZE 4096
 #define USER_IO 1
 #define NAND_READ 1
+#define FEMU_ZNS_RR_READ 0xc2
+#define FEMU_ZNS_RR_MARKER 0x52520000u
+#define FEMU_ZNS_RR_PENDING 0x07f0
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define cpu_to_le32(x) htole32(x)
 #define cpu_to_le64(x) htole64(x)
 #define le64_to_cpu(x) le64toh(x)
+#define le32_to_cpu(x) le32toh(x)
 #define qatomic_read(p) __atomic_load_n((p), __ATOMIC_SEQ_CST)
 #define qatomic_set(p,v) __atomic_store_n((p),(v), __ATOMIC_SEQ_CST)
 #define qatomic_inc(p) __atomic_fetch_add((p),1,__ATOMIC_SEQ_CST)
@@ -45,6 +50,10 @@ struct zns_blk { uint64_t read_count,page_wp; };
 struct zns_ssd {
   uint64_t num_ch,num_lun,num_plane,chnls_per_zone,lbasz;
   bool rr_history_enabled;
+  /* 补齐当前生产读取函数使用的统计字段；旧C2功能用例保持严格模式关闭。 */
+  bool rr_strict;
+  uint64_t rr_blocked_reads,rr_actual_reads,rr_self_reads,rr_counted_reads;
+  uint64_t rr_other_migration_reads,rr_trigger_events,rr_peak_count;
   uint64_t rr_threshold,rr_session_hi,rr_session_lo;
   uint32_t rr_history_max_events;
   ZnsRrZoneHistory* rr_history;
@@ -59,7 +68,11 @@ typedef struct NvmeNamespace {
 } NvmeNamespace;
 typedef struct FemuCtrl { unsigned unused; } FemuCtrl;
 typedef struct NvmeCmd { struct { uint64_t prp1,prp2; } dptr; } NvmeCmd;
-typedef struct NvmeRequest { uint64_t slba,stime; uint32_t nlb; } NvmeRequest;
+typedef struct NvmeRequest {
+  uint64_t slba,stime; uint32_t nlb; uint16_t status;
+  struct {uint8_t opcode;uint32_t cdw13;} cmd;
+  struct {struct {uint32_t result;} n;} cqe;
+} NvmeRequest;
 struct nand_cmd { int type,cmd; uint64_t stime; };
 static uint64_t test_ns;
 static uint64_t qemu_clock_get_ns(int unused) {

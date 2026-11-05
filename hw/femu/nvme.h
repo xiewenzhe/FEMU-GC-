@@ -1149,6 +1149,8 @@ enum NvmeLogIdentifier {
     NVME_LOG_FEMU_STATS         = 0xc0,
     NVME_LOG_ZNS_RR_STATS       = 0xc1,
     NVME_LOG_ZNS_RR_RECENT      = 0xc2,
+    NVME_LOG_ZNS_RR_STRICT      = 0xc3,
+    NVME_LOG_ZNS_RR_BLOCKS      = 0xc4,
 };
 
 /* 厂商自定义 C1h 日志页按 ZNS 命名空间提供，所有整数字段均为小端序。 */
@@ -1998,9 +2000,13 @@ typedef struct ZNSCtrlParams {
     uint8_t  zns_num_ch;
     uint8_t  zns_num_lun;
     uint8_t  zns_num_plane;
-    uint8_t  zns_num_blk;
+    uint32_t zns_num_blk;
+    uint32_t zns_page_size; /* NAND页字节数；默认保持原16KiB行为 */
+    /* 0保留旧推导；非零严格校验容量。 */
+    uint32_t zns_pgs_per_blk;
     int zns_flash_type;
     uint64_t zns_rr_threshold; /* 主机端 RR 使用的物理块读取阈值；0 表示关闭计数 */
+    bool zns_rr_strict; /* 默认关闭；严格触发及逐块刷新豁免实验 */
     bool zns_rr_history; /* 默认关闭，不影响原始RC与维护路径 */
     uint32_t zns_rr_history_max_events; /* 每块事件上限；溢出窗口明确标为不可用 */
     /*

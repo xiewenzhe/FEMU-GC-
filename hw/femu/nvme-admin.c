@@ -1923,6 +1923,7 @@ static uint16_t nvme_supported_log_pages(FemuCtrl *n, NvmeCmd *cmd,
         /* 关闭新统计时不改变原有支持页列表。 */
         if (n->zns_params.zns_rr_history) {
             lids[NVME_LOG_ZNS_RR_RECENT] = cpu_to_le32(NVME_LIDS_LSUPP);
+            lids[NVME_LOG_ZNS_RR_BLOCKS] = cpu_to_le32(NVME_LIDS_LSUPP);
         }
     }
 

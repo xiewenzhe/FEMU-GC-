@@ -12,6 +12,12 @@
 #include "zftl.h"
 #include "../nand/nand-media.h"
 #include "rr-history.h"
+#include "rr-strict.h"
+
+/* 独立实验协议：普通/搬迁读取标记，拒绝把迁移类型直接等同于全块豁免。 */
+#define FEMU_ZNS_RR_READ 0xc2
+#define FEMU_ZNS_RR_MARKER 0x52520000u
+#define FEMU_ZNS_RR_PENDING 0x07f0
 
 #define LOGICAL_PAGE_SIZE (4*KiB)
 #define ZNS_PAGE_SIZE (16*KiB)
@@ -156,7 +162,12 @@ struct zns_ssd {
     uint64_t num_plane;
     uint64_t num_blk;
     uint64_t num_page;
+    uint64_t page_size; /* 实际NAND页大小，与4KiB逻辑页区分 */
     uint64_t rr_threshold; /* 0 表示关闭读干扰计数 */
+    bool rr_strict;
+    uint64_t rr_actual_reads, rr_counted_reads, rr_self_reads;
+    uint64_t rr_other_migration_reads, rr_trigger_events, rr_blocked_reads;
+    uint64_t rr_peak_count;
     bool rr_history_enabled;
     uint32_t rr_history_max_events;
     uint32_t rr_history_nr_zones;

@@ -11,6 +11,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
+#include "qemu/units.h"
 #include "libqtest.h"
 #include "qobject/qdict.h"
 #include "qobject/qjson.h"
@@ -1696,6 +1697,182 @@ static uint16_t femu_get_log(FemuCtrlState *c, uint8_t lid, uint64_t buf,
     cmd.cdw13 = cpu_to_le32((uint32_t)(off >> 32));
 
     return femu_admin(c, &cmd);
+}
+
+/* 实际NVMe命令验证严格计数：两个物理块、自身豁免、跨块搬迁及Reset。 */
+static void femu_test_zns_rr_strict(void *obj, void *data,
+                                    QGuestAllocator *alloc)
+{
+    QFemu *femu = obj;
+    FemuCtrlState c = { 0 };
+    QTestState *qts = femu->dev.bus->qts;
+    uint64_t buf = guest_alloc(alloc, FEMU_DATA_SIZE);
+    NvmeCmd cmd = { 0 };
+    unsigned i;
+
+    femu_enable(&c, &femu->dev, alloc);
+    femu_create_io_queues(&c);
+    qtest_memset(qts, buf, 0x5a, FEMU_DATA_SIZE);
+    for (i = 0; i < 9; i++) {
+        g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_WRITE, i * 8, buf)),
+                        ==, NVME_SUCCESS);
+    }
+    for (i = 0; i < 3; i++) {
+        g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_READ, 0, buf)),
+                        ==, NVME_SUCCESS);
+    }
+    cmd.opcode = 0xc2;
+    cmd.nsid = cpu_to_le32(1);
+    cmd.dptr.prp1 = cpu_to_le64(buf);
+    cmd.cdw12 = cpu_to_le32(7);
+    cmd.cdw13 = cpu_to_le32(0x52520001);
+    femu_submit(&c, &c.io, &cmd);
+    g_assert_cmpint(FEMU_SC(femu_complete(&c, &c.io, NULL, NULL)), ==, NVME_SUCCESS);
+    g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_READ, 0, buf)), ==, 0x7f0);
+    femu_submit(&c, &c.io, &cmd);
+    g_assert_cmpint(FEMU_SC(femu_complete(&c, &c.io, NULL, NULL)), ==, NVME_SUCCESS);
+    /* 每个编程单元四页；第五页才属于另一个LUN的物理块。 */
+    cmd.cdw10 = cpu_to_le32(32);
+    femu_submit(&c, &c.io, &cmd);
+    g_assert_cmpint(FEMU_SC(femu_complete(&c, &c.io, NULL, NULL)), ==, NVME_SUCCESS);
+    for (i = 0; i < 3; i++) {
+        g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_READ, 32, buf)), ==, NVME_SUCCESS);
+    }
+    femu_submit(&c, &c.io, &cmd);
+    g_assert_cmpint(FEMU_SC(femu_complete(&c, &c.io, NULL, NULL)), ==, NVME_SUCCESS);
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADM_CMD_GET_LOG_PAGE;cmd.nsid = cpu_to_le32(1);
+    cmd.dptr.prp1 = cpu_to_le64(buf);cmd.cdw10 = cpu_to_le32(0xc3 | (17 << 16));
+    g_assert_cmpint(femu_admin(&c, &cmd), ==, NVME_SUCCESS);
+    g_assert_cmpuint(qtest_readq(qts, buf + 8), ==, 1);
+    g_assert_cmpuint(qtest_readq(qts, buf + 16), ==, 10);
+    g_assert_cmpuint(qtest_readq(qts, buf + 24), ==, 8);
+    g_assert_cmpuint(qtest_readq(qts, buf + 32), ==, 2);
+    g_assert_cmpuint(qtest_readq(qts, buf + 40), ==, 2);
+    g_assert_cmpuint(qtest_readq(qts, buf + 48), ==, 2);
+    g_assert_cmpuint(qtest_readq(qts, buf + 56), ==, 1);
+    g_assert_cmpuint(qtest_readq(qts, buf + 64), ==, 4);
+    g_assert_cmpint(femu_zone_action(&c, 0, FEMU_ZONE_ACTION_RESET), ==, NVME_SUCCESS);
+    cmd.cdw10 = cpu_to_le32(0xc1 | (17 << 16));
+    g_assert_cmpint(femu_admin(&c, &cmd), ==, NVME_SUCCESS);
+    g_assert_cmpuint(qtest_readq(qts, buf + 40), ==, 0);
+    guest_free(alloc, buf);femu_queue_free(&c, &c.io);femu_disable(&c);
+}
+
+/* 校验小容量及论文几何的真实物理映射。 */
+static void femu_test_zns_explicit_geometry(void *obj, void *data,
+                                          QGuestAllocator *alloc)
+{
+    QFemu *femu = obj;
+    FemuCtrlState c = { 0 };
+    QTestState *qts = femu->dev.bus->qts;
+    bool paper = GPOINTER_TO_INT(data);
+    uint64_t zone_bytes = paper ? 128 * MiB : 64 * KiB;
+    uint32_t blocks = paper ? 128 : 1;
+    uint32_t stripe_pages = blocks * 4;
+    uint64_t buf, slba, target;
+    uint8_t report[192], raw[88], payload[FEMU_DATA_SIZE];
+    NvmeCmd cmd;
+    uint32_t i;
+
+    femu_enable(&c, &femu->dev, alloc);
+    femu_create_io_queues(&c);
+    buf = guest_alloc(alloc, FEMU_DATA_SIZE);
+    femu_zone_report(&c, buf, report);
+    g_assert_cmpuint(ldq_le_p(report), ==, 256);
+    g_assert_cmpuint(ldq_le_p(report + 72) * c.lba_size, ==, zone_bytes);
+    slba = 255 * zone_bytes / c.lba_size;
+    target = slba + (stripe_pages - 1) * FEMU_DATA_SIZE / c.lba_size;
+
+    /* 多写一页使条带进入NAND，并检查最后物理资源。 */
+    qtest_memset(qts, buf, 0x5a, FEMU_DATA_SIZE);
+    for (i = 0; i <= stripe_pages; i++) {
+        g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_WRITE,
+            slba + i * FEMU_DATA_SIZE / c.lba_size, buf)), ==, NVME_SUCCESS);
+    }
+    for (i = 0; i < 1024; i++) {
+        g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_READ, target, buf)),
+                        ==, NVME_SUCCESS);
+    }
+    qtest_memread(qts, buf, payload, sizeof(payload));
+    for (i = 0; i < sizeof(payload); i++) {
+        g_assert_cmpuint(payload[i], ==, 0x5a);
+    }
+
+    /* C2是命名空间日志，不能使用通用工具的广播NSID。 */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADM_CMD_GET_LOG_PAGE;
+    cmd.nsid = cpu_to_le32(1);
+    cmd.dptr.prp1 = cpu_to_le64(buf);
+    cmd.cdw10 = cpu_to_le32(0xc2 | ((56 / 4 - 1) << 16));
+    g_assert_cmpint(femu_admin(&c, &cmd), ==, NVME_SUCCESS);
+    qtest_memread(qts, buf, raw, 56);
+    g_assert_cmpuint(ldl_le_p(raw + 8), ==, 256);
+    g_assert_cmpuint(ldl_le_p(raw + 12), ==, blocks);
+    g_assert_cmpuint(ldq_le_p(raw + 16), ==, 1024);
+
+    cmd.cdw10 = cpu_to_le32(0xc2 | ((88 / 4 - 1) << 16));
+    cmd.cdw12 = cpu_to_le32(56 + 255 * 88);
+    g_assert_cmpint(femu_admin(&c, &cmd), ==, NVME_SUCCESS);
+    qtest_memread(qts, buf, raw, sizeof(raw));
+    g_assert_cmpuint(ldq_le_p(raw), ==, slba);
+    g_assert_cmpuint(ldq_le_p(raw + 32), ==, 1024);
+    g_assert_cmpuint(ldl_le_p(raw + 60), ==, blocks - 1);
+    g_assert_cmpuint(ldl_le_p(raw + 64), ==, paper ? 7 : 0);
+    g_assert_cmpuint(ldl_le_p(raw + 68), ==, paper ? 3 : 0);
+    g_assert_cmpuint(ldl_le_p(raw + 72), ==, paper ? 3 : 0);
+    g_assert_cmpuint(ldl_le_p(raw + 76), ==, 255);
+    g_assert_cmpuint(ldq_le_p(raw + 8), ==, 0);
+
+    g_assert_cmpint(femu_zone_action(&c, slba, FEMU_ZONE_ACTION_RESET),
+                    ==, NVME_SUCCESS);
+    g_assert_cmpint(femu_admin(&c, &cmd), ==, NVME_SUCCESS);
+    qtest_memread(qts, buf, raw, sizeof(raw));
+    g_assert_cmpuint(ldq_le_p(raw + 8), ==, 1);
+    g_assert_cmpuint(ldq_le_p(raw + 32), ==, 0);
+    g_assert_cmpuint(ldq_le_p(raw + 40), ==, 0);
+    g_assert_cmpuint(ldq_le_p(raw + 48), ==, 0);
+    g_assert_cmpint(FEMU_SC(femu_rw(&c, NVME_CMD_READ, target, buf)),
+                    ==, NVME_SUCCESS);
+    qtest_memread(qts, buf, payload, sizeof(payload));
+    for (i = 0; i < sizeof(payload); i++) {
+        g_assert_cmpuint(payload[i], ==, 0);
+    }
+    guest_free(alloc, buf);
+    femu_queue_free(&c, &c.io);
+    femu_disable(&c);
+}
+
+/* 拒绝错误几何，防止截断及除零。 */
+static void femu_test_zns_explicit_invalid(void *obj, void *data,
+                                         QGuestAllocator *alloc)
+{
+    QFemu *femu = obj;
+    const char *cases[][2] = {
+        { "'zns_num_blk':65537", "zns_num_blk" },
+        { "'zns_page_size':8192", "页大小" },
+        { "'zns_page_size':4096", "zns_pgs_per_blk" },
+        { "'zns_page_size':4096,'zns_pgs_per_blk':256", "不一致" },
+        { "'zns_flash_type':0,'zns_pgs_per_blk':256", "zns_flash_type" },
+    };
+    unsigned int i;
+
+    for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+        g_autofree char *command = g_strdup_printf(
+            "{'execute':'device_add','arguments':{"
+            "'driver':'femu','id':'bad-geometry-%u','addr':'5',"
+            "'devsz_mb':16,'femu_mode':3,%s}}", i, cases[i][0]);
+        QDict *rsp;
+
+        qtest_qmp_send_raw(femu->dev.bus->qts, "%s", command);
+        rsp = qtest_qmp_receive(femu->dev.bus->qts);
+
+        g_assert_true(qdict_haskey(rsp, "error"));
+        g_assert_nonnull(strstr(qdict_get_str(qdict_get_qdict(rsp, "error"),
+                                              "desc"), cases[i][1]));
+        qobject_unref(rsp);
+    }
+    qos_invalidate_command_line();
 }
 
 /*
@@ -17155,6 +17332,34 @@ static void femu_register_nodes(void)
                  &(QOSGraphTestOptions) {
         .edge.extra_device_opts = "femu_mode=3,lba_index=1"
     });
+    qos_add_test("zns-explicit-geometry", "femu",
+                 femu_test_zns_explicit_geometry, &(QOSGraphTestOptions) {
+        .edge.extra_device_opts =
+            "devsz_mb=16,femu_mode=3,secsz=512,zns_num_ch=1,"
+            "zns_num_lun=1,zns_num_plane=1,zns_num_blk=256,"
+            "zns_page_size=4096,zns_pgs_per_blk=16,"
+            "zns_rr_threshold=1024,zns_rr_history=on"
+    });
+    qos_add_test("zns-rr-strict", "femu", femu_test_zns_rr_strict,
+                 &(QOSGraphTestOptions) {
+        .edge.extra_device_opts =
+            "devsz_mb=16,femu_mode=3,secsz=512,zns_num_ch=1,"
+            "zns_num_lun=2,zns_num_plane=1,zns_num_blk=128,"
+            "zns_page_size=4096,zns_pgs_per_blk=16,zns_rr_threshold=4,"
+            "zns_rr_history=on,zns_rr_strict=on"
+    });
+    qos_add_test("zns-finerr-profile", "femu",
+                 femu_test_zns_explicit_geometry, &(QOSGraphTestOptions) {
+        .arg = GINT_TO_POINTER(1),
+        .edge.extra_device_opts =
+            "devsz_mb=32768,femu_mode=3,secsz=512,zns_num_ch=8,"
+            "zns_num_lun=4,zns_num_plane=4,zns_num_blk=256,"
+            "zns_page_size=4096,zns_pgs_per_blk=256,zns_flash_type=4,"
+            "zns_pg_rd_lat=40000,zns_pg_wr_lat=200000,"
+            "zns_blk_er_lat=2000000,zns_rr_threshold=1024,zns_rr_history=on"
+    });
+    qos_add_test("zns-explicit-invalid", "femu",
+                 femu_test_zns_explicit_invalid, NULL);
     qos_add_test("zone-append-parallel", "femu",
                  femu_test_zone_append_parallel, &(QOSGraphTestOptions) {
         .edge.extra_device_opts =

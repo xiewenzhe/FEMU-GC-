@@ -1878,6 +1878,16 @@ static uint16_t zns_io_cmd(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req)
 {
     switch (cmd->opcode) {
+    case FEMU_ZNS_RR_READ:
+        /* 每条标记请求恰好一个4KiB页，阈值响应不会藏在多页成功完成中。 */
+        if (!ns->zns->rr_strict ||
+            (le32_to_cpu(cmd->cdw13) != FEMU_ZNS_RR_MARKER &&
+             le32_to_cpu(cmd->cdw13) != (FEMU_ZNS_RR_MARKER | 1)) ||
+            le32_to_cpu(cmd->cdw12) != 7 ||
+            (le32_to_cpu(cmd->cdw10) & 7)) {
+            return NVME_INVALID_FIELD | NVME_DNR;
+        }
+        return zns_nvme_rw(n, ns, cmd, req, false);
     case NVME_CMD_READ:
     case NVME_CMD_WRITE:
         return zns_nvme_rw(n, ns, cmd, req,false);
@@ -1927,7 +1937,8 @@ static void zns_init_plane(struct zns_plane *plane,int num_blk,int flash_type)
     plane->next_plane_avail_time = 0;
 }
 
-static void zns_init_fc(struct zns_fc *fc,uint8_t num_plane,uint8_t num_blk,int flash_type)
+static void zns_init_fc(struct zns_fc *fc, uint8_t num_plane,
+                        uint32_t num_blk, int flash_type)
 {
     fc->plane = g_malloc0(sizeof(struct zns_plane) * num_plane);
     for(int i = 0;i < num_plane;i++)
@@ -1937,7 +1948,8 @@ static void zns_init_fc(struct zns_fc *fc,uint8_t num_plane,uint8_t num_blk,int 
     fc->next_fc_avail_time = 0;
 }
 
-static void zns_init_ch(struct zns_ch *ch, uint8_t num_lun,uint8_t num_plane, uint8_t num_blk,int flash_type)
+static void zns_init_ch(struct zns_ch *ch, uint8_t num_lun, uint8_t num_plane,
+                        uint32_t num_blk, int flash_type)
 {
     ch->fc = g_malloc0(sizeof(struct zns_fc) * num_lun);
     for (int i = 0; i < num_lun; i++) {
@@ -1956,10 +1968,16 @@ static void zns_init_params(FemuCtrl *n, NvmeNamespace *ns)
     id_zns->num_lun = n->zns_params.zns_num_lun;
     id_zns->num_plane = n->zns_params.zns_num_plane;
     id_zns->num_blk = n->zns_params.zns_num_blk;
-    id_zns->num_page = ns->size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
+    id_zns->page_size = n->zns_params.zns_page_size;
+    /* 指定页数则使用完整几何，否则保留旧推导。 */
+    id_zns->num_page = n->zns_params.zns_pgs_per_blk ?
+        n->zns_params.zns_pgs_per_blk :
+        ns->size / id_zns->page_size /
+        (id_zns->num_ch * id_zns->num_lun * id_zns->num_blk);
     id_zns->lbasz = 1 << zns_ns_lbads(ns);
     id_zns->flash_type = n->zns_params.zns_flash_type;
     id_zns->rr_threshold = n->zns_params.zns_rr_threshold;
+    id_zns->rr_strict = n->zns_params.zns_rr_strict;
     id_zns->rr_history_enabled = n->zns_params.zns_rr_history;
     id_zns->rr_history_max_events = n->zns_params.zns_rr_history_max_events;
     if (id_zns->rr_history_enabled) {
@@ -1993,7 +2011,8 @@ static void zns_init_params(FemuCtrl *n, NvmeNamespace *ns)
 
     //Misao: init sram
     /* one program covers every plane of a die; the flush walks the same set */
-    id_zns->program_unit = ZNS_PAGE_SIZE * id_zns->flash_type * id_zns->num_plane;
+    id_zns->program_unit = id_zns->page_size * id_zns->flash_type *
+                          id_zns->num_plane;
     id_zns->stripe_unit = id_zns->program_unit*id_zns->num_ch*id_zns->num_lun;
     /*
      * One write cache stages the partial stripe of one zone, so a device
@@ -2022,6 +2041,10 @@ static void zns_init_params(FemuCtrl *n, NvmeNamespace *ns)
     femu_log("|        ZMS HW Configuration()           |\n");      
     femu_log("===========================================\n");
     femu_log("|\tnchnl\t: %lu\t|\tchips per chnl\t: %lu\t|\tplanes per chip\t: %lu\t|\tblks per plane\t: %lu\t|\tpages per blk\t: %lu\t|\n",id_zns->num_ch,id_zns->num_lun,id_zns->num_plane,id_zns->num_blk,id_zns->num_page);
+    femu_log("ZNS物理配置：NAND页字节=%lu，每块页数=%lu，"
+             "显式几何=%d；LUN为扁平资源，不区分Chip/Die层级\n",
+             id_zns->page_size, id_zns->num_page,
+             n->zns_params.zns_pgs_per_blk != 0);
     //femu_log("|\tl2p sz\t: %lu\t|\tl2p cache sz\t: %u\t|\n",id_zns->l2p_sz,id_zns->cache.num_l2p_ent);
     femu_log("|\tprogram unit\t: %lu KiB\t|\tstripe unit\t: %lu KiB\t|\t# of write caches\t: %u\t|\t size of write caches (4KiB)\t: %lu\t|\n",id_zns->program_unit/(KiB),id_zns->stripe_unit/(KiB),id_zns->cache.num_wc,(id_zns->stripe_unit/LOGICAL_PAGE_SIZE));
     femu_log("===========================================\n"); 
@@ -2060,6 +2083,12 @@ static void zns_init_params(FemuCtrl *n, NvmeNamespace *ns)
         id_zns->timing.blk_er_lat[id_zns->flash_type] =
             n->zns_params.zns_blk_er_lat;
     }
+    femu_log("ZNS维护配置：读纳秒=%lu，编程纳秒=%lu，"
+             "擦除纳秒=%lu，RR阈值=%lu\n",
+             id_zns->timing.pg_rd_lat[id_zns->flash_type],
+             id_zns->timing.pg_wr_lat[id_zns->flash_type],
+             id_zns->timing.blk_er_lat[id_zns->flash_type],
+             id_zns->rr_threshold);
 
     /*
      * Channel bus phases. The array timing above is per die; the bus is
@@ -2111,7 +2140,8 @@ static int zns_init_zone_cap(FemuCtrl *n, NvmeNamespace *ns)
     struct zns_ssd* zns  = ns->zns;
     n->zoned = true;
     n->zasl_bs = n->zns_params.zns_zasl_bs;
-    ns->zone_size_bs = zns->chnls_per_zone*zns->num_lun*zns->num_plane*zns->num_page*ZNS_PAGE_SIZE;
+    ns->zone_size_bs = zns->chnls_per_zone * zns->num_lun * zns->num_plane *
+                       zns->num_page * zns->page_size;
     /* keep a user-set capacity; 0 means the zone is fully usable */
     /* cross_zone_read comes from the device property; do not clear it here */
     /*
@@ -2171,31 +2201,65 @@ static bool zns_check_params(FemuCtrl *n, NvmeNamespace *ns, Error **errp)
         return false;
     }
 
-    /* the LUN and block counts are 8-bit properties and always fit their fields */
+    /* LUN保持8位，Block仍受PPA宽度约束。 */
     if (p->zns_num_ch < 1 || p->zns_num_ch > (1 << CH_BITS) ||
         p->zns_num_lun < 1 ||
         p->zns_num_plane < 1 || p->zns_num_plane > (1 << PL_BITS) ||
-        p->zns_num_blk < 1) {
+        p->zns_num_blk < 1 || p->zns_num_blk > (1U << BLK_BITS)) {
         error_setg(errp, "zns geometry out of range: zns_num_ch in [1, %d], "
                    "zns_num_lun >= 1, zns_num_plane in [1, %d], "
-                   "zns_num_blk >= 1", 1 << CH_BITS, 1 << PL_BITS);
+                   "zns_num_blk in [1, %u]", 1 << CH_BITS,
+                   1 << PL_BITS, 1U << BLK_BITS);
         return false;
     }
+    if (p->zns_flash_type < SLC || p->zns_flash_type >= MAX_FLASH_TYPE) {
+        error_setg(errp, "zns_flash_type must be in [%d, %d]", SLC, PLC);
+        return false;
+    }
+    if (p->zns_page_size != 4 * KiB && p->zns_page_size != ZNS_PAGE_SIZE) {
+        error_setg(errp, "ZNS NAND页大小仅支持4096或16384字节");
+        return false;
+    }
+    if (p->zns_page_size != ZNS_PAGE_SIZE && !p->zns_pgs_per_blk) {
+        error_setg(errp, "非默认NAND页大小必须指定"
+                   "zns_pgs_per_blk");
+        return false;
+    }
+    if (p->zns_pgs_per_blk) {
+        uint64_t physical;
+
+        if (p->zns_pgs_per_blk > (1U << PG_BITS) ||
+            p->zns_pgs_per_blk % p->zns_flash_type) {
+            error_setg(errp, "显式每块页数必须符合PPA宽度，"
+                       "并为单元位数的倍数");
+            return false;
+        }
+        physical = (uint64_t)p->zns_num_ch * p->zns_num_lun *
+                   p->zns_num_plane * p->zns_num_blk * p->zns_pgs_per_blk;
+        if (physical > UINT64_MAX / p->zns_page_size) {
+            error_setg(errp, "显式ZNS物理容量超过64位范围");
+            return false;
+        }
+        physical *= p->zns_page_size;
+        if (physical != ns->size) {
+            error_setg(errp, "显式ZNS物理容量%" PRIu64
+                       "字节与命名空间容量%" PRIu64 "字节不一致",
+                       physical, ns->size);
+            return false;
+        }
+    }
     dies = (uint64_t)p->zns_num_ch * p->zns_num_lun * p->zns_num_blk;
-    if (ns->size / ZNS_PAGE_SIZE / dies < 1 ||
-        ns->size / ZNS_PAGE_SIZE / dies > (1 << PG_BITS)) {
+    if (!p->zns_pgs_per_blk &&
+        (ns->size / p->zns_page_size / dies < 1 ||
+         ns->size / p->zns_page_size / dies > (1 << PG_BITS))) {
         error_setg(errp, "zns geometry gives %" PRIu64 " pages per block; "
-                   "must be in [1, %d]", ns->size / ZNS_PAGE_SIZE / dies,
+                   "must be in [1, %d]", ns->size / p->zns_page_size / dies,
                    1 << PG_BITS);
         return false;
     }
     if (ns->zns_chnls_per_zone && p->zns_num_ch % ns->zns_chnls_per_zone) {
         error_setg(errp, "zns_chnls_per_zone %u must divide zns_num_ch %u",
                    ns->zns_chnls_per_zone, p->zns_num_ch);
-        return false;
-    }
-    if (p->zns_flash_type < SLC || p->zns_flash_type >= MAX_FLASH_TYPE) {
-        error_setg(errp, "zns_flash_type must be in [%d, %d]", SLC, PLC);
         return false;
     }
     /*
@@ -2530,9 +2594,96 @@ static uint16_t zns_rr_recent_log(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     return status;
 }
 
-/*
- * 处理ZNS命名空间的变更列表、原累计读压力及近期逐块统计；其他页由通用层处理。
+/* C4h：LSI选择一个Zone，一条命令返回其全部物理块的同锁快照。
+ * 沿用C2h条目布局，但不改变C2h的最大RC语义。不同命令不是同一快照。
  */
+static uint16_t zns_rr_blocks_log(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
+                                 uint32_t len, uint64_t off)
+{
+    struct zns_ssd *zns = ns->zns;
+    uint32_t z = le32_to_cpu(cmd->cdw11) >> 16;
+    uint32_t count = zns->chnls_per_zone * zns->num_lun * zns->num_plane;
+    size_t size = sizeof(ZnsRrRecentHeader) +
+                  (size_t)count * sizeof(ZnsRrRecentEntry);
+    ZnsRrRecentHeader *hdr;
+    ZnsRrRecentEntry *entries;
+    ZnsRrZoneHistory *h;
+    uint8_t *log;
+    uint64_t now;
+    uint32_t ch_lo, blk, ch, lun, pl, id = 0;
+    uint16_t status;
+
+    if (!zns->rr_history_enabled || !zns->rr_history) {
+        return NVME_INVALID_LOG_ID | NVME_DNR;
+    }
+    if (z >= ns->num_zones || !count || off >= size || (off & 3)) {
+        return NVME_INVALID_FIELD | NVME_DNR;
+    }
+    log = g_malloc0(size);
+    hdr = (ZnsRrRecentHeader *)log;
+    entries = (ZnsRrRecentEntry *)(log + sizeof(*hdr));
+    hdr->version = cpu_to_le32(1);
+    hdr->entry_size = cpu_to_le32(sizeof(*entries));
+    hdr->nr_zones = cpu_to_le32(ns->num_zones);
+    hdr->blocks_per_zone = cpu_to_le32(count);
+    hdr->read_threshold = cpu_to_le64(zns->rr_threshold);
+    hdr->session_hi = cpu_to_le64(zns->rr_session_hi);
+    hdr->session_lo = cpu_to_le64(zns->rr_session_lo);
+    hdr->window10_ns = cpu_to_le64(10 * FEMU_RR_SECOND_NS);
+    hdr->window30_ns = cpu_to_le64(FEMU_RR_HISTORY_NS);
+    h = &zns->rr_history[z];
+    ch_lo = (z % (zns->num_ch / zns->chnls_per_zone)) * zns->chnls_per_zone;
+    blk = z / (zns->num_ch / zns->chnls_per_zone);
+    qemu_mutex_lock(&h->lock);
+    now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    for (ch = ch_lo; ch < ch_lo + zns->chnls_per_zone; ch++) {
+        for (lun = 0; lun < zns->num_lun; lun++) {
+            for (pl = 0; pl < zns->num_plane; pl++, id++) {
+                FemuRrHistory *history = &h->blocks[id];
+                ZnsRrRecentEntry *e = &entries[id];
+                uint32_t flags = ZNS_RR_RECENT_ENABLED;
+
+                femu_rr_history_prune(history, now);
+                if (femu_rr_history_valid(history, now, h->born_ns,
+                                          10 * FEMU_RR_SECOND_NS)) {
+                    flags |= ZNS_RR_RECENT_VALID_10;
+                }
+                if (femu_rr_history_valid(history, now, h->born_ns,
+                                          FEMU_RR_HISTORY_NS)) {
+                    flags |= ZNS_RR_RECENT_VALID_30;
+                }
+                if (history->has_loss && !(flags & ZNS_RR_RECENT_VALID_30)) {
+                    flags |= ZNS_RR_RECENT_LOSS;
+                }
+                e->zslba = cpu_to_le64(ns->zone_array[z].d.zslba);
+                e->generation = cpu_to_le64(h->generation);
+                e->snapshot_ns = cpu_to_le64(now);
+                e->epoch_start_ns = cpu_to_le64(h->born_ns);
+                e->current_rc = cpu_to_le64(qatomic_read(
+                    &zns->ch[ch].fc[lun].plane[pl].blk[blk].read_count));
+                e->delta10 = cpu_to_le64(femu_rr_history_delta(
+                    history, now, 10 * FEMU_RR_SECOND_NS));
+                e->delta30 = cpu_to_le64(femu_rr_history_delta(
+                    history, now, FEMU_RR_HISTORY_NS));
+                e->zone_index = cpu_to_le32(z);
+                e->block_id = cpu_to_le32(id);
+                e->ch = cpu_to_le32(ch);
+                e->lun = cpu_to_le32(lun);
+                e->plane = cpu_to_le32(pl);
+                e->block = cpu_to_le32(blk);
+                e->flags = cpu_to_le32(flags);
+            }
+        }
+    }
+    qemu_mutex_unlock(&h->lock);
+    status = dma_read_prp(n, log + off, MIN((size_t)len, size - off),
+                          le64_to_cpu(cmd->dptr.prp1),
+                          le64_to_cpu(cmd->dptr.prp2));
+    g_free(log);
+    return status;
+}
+
+/* 处理ZNS命名空间的状态及只读维护遥测。 */
 static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
 {
     uint32_t dw10 = le32_to_cpu(cmd->cdw10);
@@ -2549,7 +2700,8 @@ static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
     NvmeNamespace *ns;
 
     if (lid != NVME_LOG_CHANGED_ZONE_LIST &&
-        lid != NVME_LOG_ZNS_RR_STATS && lid != NVME_LOG_ZNS_RR_RECENT) {
+        lid != NVME_LOG_ZNS_RR_STATS && lid != NVME_LOG_ZNS_RR_RECENT &&
+        lid != NVME_LOG_ZNS_RR_STRICT && lid != NVME_LOG_ZNS_RR_BLOCKS) {
         return NVME_INVALID_LOG_ID | NVME_DNR;
     }
     /* 变更 Zone 列表的日志偏移量必须按 8 字节对齐。 */
@@ -2566,11 +2718,34 @@ static uint16_t zns_get_log(FemuCtrl *n, NvmeCmd *cmd)
         return NVME_INVALID_FIELD | NVME_DNR;
     }
 
+    if (lid == NVME_LOG_ZNS_RR_STRICT) {
+        uint64_t log[9] = {
+            cpu_to_le64(1), cpu_to_le64(ns->zns->rr_strict),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_actual_reads)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_counted_reads)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_self_reads)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_other_migration_reads)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_trigger_events)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_blocked_reads)),
+            cpu_to_le64(qatomic_read(&ns->zns->rr_peak_count)),
+        };
+        if (off >= sizeof(log)) {
+            return NVME_INVALID_FIELD | NVME_DNR;
+        }
+        return dma_read_prp(n, (uint8_t *)log + off,
+                            MIN(len, sizeof(log) - off),
+                            le64_to_cpu(cmd->dptr.prp1),
+                            le64_to_cpu(cmd->dptr.prp2));
+    }
+
     if (lid == NVME_LOG_ZNS_RR_STATS) {
         return zns_rr_stats_log(n, ns, cmd, len, off);
     }
     if (lid == NVME_LOG_ZNS_RR_RECENT) {
         return zns_rr_recent_log(n, ns, cmd, len, off);
+    }
+    if (lid == NVME_LOG_ZNS_RR_BLOCKS) {
+        return zns_rr_blocks_log(n, ns, cmd, len, off);
     }
     return zns_changed_zone_list(n, ns, cmd, len, off, rae);
 }
