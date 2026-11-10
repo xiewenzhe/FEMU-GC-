@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "checks": {
+    "pdfs_and_page_counts": 3,
+    "total_pdf_pages": 44,
+    "local_markdown_links": 21,
+    "unchanged_overleaf_files": 27,
+    "coldmap_frozen_artifact_files": 5
+  },
+  "teaching_examples_only_not_measurements": {
+    "coldmap_output_MB": "2044/25",
+    "coldmap_weighted_coldness": "3/5",
+    "coldmap_zone_A_score": "7/5",
+    "coldmap_zone_B_score": "2/5",
+    "coldmap_copy_weighted_coldness": "9/20",
+    "coldmap_depth_history_2_5_4": 3,
+    "coldmap_depth_history_5_4_7": 5,
+    "oaza_dynamic_quantity": "15/2",
+    "oaza_last_file_cost_order_A": "12/5",
+    "oaza_last_file_cost_order_B": "12/25",
+    "oaza_incremental_throughput_percent": 1.0624
+  },
+  "implementation_or_performance_tests": "not run; reading and documentation only",
+  "limitations": [
+    "No separate supplementary verified",
+    "Coverage is a human reading statement; hashes verify source identity, not comprehension",
+    "ColdMap/OAZA ambiguities remain unresolved and are recorded in the notes"
+  ]
+}

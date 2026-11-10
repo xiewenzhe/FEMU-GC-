@@ -1,0 +1,245 @@
+{
+  "read_at_beijing": "2026-11-09T20:15:54.588507+08:00",
+  "purpose": "Writing-plan evidence snapshot; no experiments, source mutation, original archive re-audit, or live process verification",
+  "sources": [
+    {
+      "file_relative_to_repository": "ZNS_GC_RR_Research_Plan.docx",
+      "bytes": 168836,
+      "sha256": "0b38fc85feef2049e8bd4ce6883867051e45151db296d5aaff5eabc26e39f9e1",
+      "role": "scope_only_not_implementation_proof"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段四/实施与结果分析.md",
+      "bytes": 10503,
+      "sha256": "64320ab2fd77774e1ae4e55614a4d21ee4465dcf2561ee9680629fe6b3b18b81",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段四/业务结果补充核验.json",
+      "bytes": 62346,
+      "sha256": "178829671bff7c64c311524c19dcb1809d01004a06e1c6639add501a985c55e7",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段五/第五阶段：数据放置收益机制与剩余成本归因报告.md",
+      "bytes": 11506,
+      "sha256": "79b07faf1c402875bc02f811da6e50bef717632e96c7c4a9dadf7376295285de",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第二步-独立实现与配对/实施与结果分析.md",
+      "bytes": 14148,
+      "sha256": "549c43a15ecdfbc01e5407729afca11fba5d8668a77d2757b398a64468fef044",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第三步-H普通目标-v1/实施与结果分析.md",
+      "bytes": 14670,
+      "sha256": "1d164bf5b14e8d79115f4c33280bf96623abeb1b272cedc9350901e7aee9e2e7",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第四步-W历史准入-v1/实施与本地验证.md",
+      "bytes": 10047,
+      "sha256": "d820f8ef9d90f802f55dfbce5c7d534c9c601f18f5f0da1437dadde36d719fd1",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第四步-W历史准入-v1/完整构建与配对/状态.json",
+      "bytes": 641,
+      "sha256": "240a1c7d6d210e106df6807a103e5e008ccf422733f34f8c25b004e94a78968c",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第四步-W历史准入-v1/完整构建与配对/设备集成核验.json",
+      "bytes": 238,
+      "sha256": "d78e92c29369632267a71bce4379cc18860b878a1b043831ea5705ad01fb70ea",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/results/placement-ablation-20261105/阶段六/第四步-W历史准入-v1/完整构建与配对/W历史设备补充核验.json",
+      "bytes": 57721,
+      "sha256": "7144526ec8a667d74696083c8a4d510b92b07f410a6a19f9caf0352c455e2d42",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/baselines/IMPLEMENTATION.md",
+      "bytes": 73611,
+      "sha256": "563acd561326284005851b4beab391fc30f1e43c9361bf9c3bdb763389441bfc",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/baselines/workspaces/comparison-20261109-v1/完整轮自动收尾/completion-state.json",
+      "bytes": 611,
+      "sha256": "06d8ca69f2b74d05f72df0f6faee9295ad14f03b9d0166c4ad2dc148843c0506",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/model/rrzc_placement_mode.h",
+      "bytes": 1988,
+      "sha256": "dbc2c9c400df08e51c147aea0200610201b334ca67b4a9a0e4f4ae89341f2099",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/model/rrzc_write_survivor.h",
+      "bytes": 1108,
+      "sha256": "a2b24ae05aeebf4a84af5944ababd1c9e68a3e588b0e7e2e579b40331ea72629",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "research/rrzc/model/rrzc_unit_cost_selector.h",
+      "bytes": 1322,
+      "sha256": "9ce6861bf3d361556594092d5a76ea13078564aee83ef53bf0fc28caf7d2435d",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "paper/reading/20261109-zns-deep-reading/notes/三篇对照与本课题边界.md",
+      "bytes": 5384,
+      "sha256": "dd4d722bc97d6f230a849a6b096be3aeffc441ff02a4a3809c5031900868080e",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    },
+    {
+      "file_relative_to_repository": "paper/reading/20261109-zns-deep-reading/language/术语与语言细节.md",
+      "bytes": 12130,
+      "sha256": "88199c04fd2dbd9798587ace7749658ec14bc906dcc497fe9c7a65c2a7de005a",
+      "role": "read_only_source; report/current-status/model scopes kept distinct"
+    }
+  ],
+  "stage4_controlled_single_run_observations": {
+    "G0": {
+      "maintenance": {
+        "ZC次数": 40,
+        "RR次数": 15,
+        "ZC迁移字节": 492549175,
+        "RR迁移字节": 803522466,
+        "总迁移字节": 1296071641,
+        "全部成功Reset次数": 95,
+        "成功复制事件": 168,
+        "复制日志字节和": 1296071641,
+        "映射提交成功数": 168,
+        "映射提交失败数": 0,
+        "复制日志与维护汇总相同": true,
+        "ZC累计账目闭合": true,
+        "RR累计账目闭合": true
+      },
+      "completed_requests": 2260992,
+      "application_throughput_ops_s": 4697.633502247469,
+      "terminal_space": {
+        "空闲字节": 500943872,
+        "有效字节": 5825873387,
+        "满区可回收字节": 1747074592
+      }
+    },
+    "G1": {
+      "maintenance": {
+        "ZC次数": 7,
+        "RR次数": 14,
+        "ZC迁移字节": 51686172,
+        "RR迁移字节": 1259054167,
+        "总迁移字节": 1310740339,
+        "全部成功Reset次数": 93,
+        "成功复制事件": 167,
+        "复制日志字节和": 1310740339,
+        "映射提交成功数": 167,
+        "映射提交失败数": 0,
+        "复制日志与维护汇总相同": true,
+        "ZC累计账目闭合": true,
+        "RR累计账目闭合": true
+      },
+      "completed_requests": 2260992,
+      "application_throughput_ops_s": 10277.485083446967,
+      "terminal_space": {
+        "空闲字节": 1281035776,
+        "有效字节": 5825873387,
+        "满区可回收字节": 1079263082
+      }
+    },
+    "G2": {
+      "maintenance": {
+        "ZC次数": 8,
+        "RR次数": 15,
+        "ZC迁移字节": 75160952,
+        "RR迁移字节": 571804696,
+        "总迁移字节": 646965648,
+        "全部成功Reset次数": 86,
+        "成功复制事件": 86,
+        "复制日志字节和": 646965648,
+        "映射提交成功数": 86,
+        "映射提交失败数": 0,
+        "复制日志与维护汇总相同": true,
+        "ZC累计账目闭合": true,
+        "RR累计账目闭合": true
+      },
+      "completed_requests": 2260992,
+      "application_throughput_ops_s": 9589.790237153169,
+      "terminal_space": {
+        "空闲字节": 1075777024,
+        "有效字节": 5825873387,
+        "满区可回收字节": 1122695306
+      }
+    }
+  },
+  "derived_effects_single_run_only": {
+    "G2_vs_G0_copy_reduction_percent": 50.08257047420421,
+    "G2_vs_G1_copy_reduction_percent": 50.64120415386102,
+    "G2_vs_G1_application_throughput_change_percent": -6.691275547569586
+  },
+  "survivor_recorded_status": {
+    "阶段": "完整编译及设备功能通过，串行配对运行中",
+    "构建": "/home/data/xwz/rrzc-baselines/joint-controlled-placement-wmig-ws-b2-20261109-results",
+    "配对": "/home/data/xwz/rrzc-baselines/joint-controlled-placement-wmig-ws-p1-20261109-results",
+    "模式": [
+      "G2",
+      "G2_WSURVIVOR"
+    ],
+    "新策略业务收益尚未确认": true,
+    "完整编译通过": true,
+    "设备状态序列": [
+      0,
+      2,
+      1
+    ],
+    "宿主旧日志未清理": true,
+    "空间预算重新核验已通过": true,
+    "空间变化来源未确认": true,
+    "基线程序保留": true,
+    "不改GC_RR触发及选择器": true
+  },
+  "survivor_functional_only": {
+    "通过": true,
+    "状态序列": [
+      0,
+      2,
+      1
+    ],
+    "再次迁移跳过协同": true,
+    "三次迁移及内容校验": true,
+    "实际复制字节": 3145728,
+    "重挂载恢复未知": true,
+    "磁盘格式未改变": true,
+    "边界": "受控必要迁移接口功能验证，不是业务收益实验；失败/部分提交仍由本地状态和真实入口测试覆盖"
+  },
+  "comparison_recorded_status": {
+    "stage": "stopped_at_controller_failure",
+    "checked_utc": "2026-11-09T09:25:35.464466+00:00",
+    "completed": [
+      "g2",
+      "caza"
+    ],
+    "current": "oaza-literal",
+    "results_claimed": false,
+    "note": "retain all failed evidence; no final result synthesized"
+  },
+  "checks": {
+    "existing_report_arithmetic": "passed",
+    "local_links": "passed",
+    "unchanged_overleaf_files": 27,
+    "compile_tests_experiments": "not run; documentation and arithmetic checks only"
+  },
+  "claim_boundaries": [
+    "No universal or statistically significant benefit asserted",
+    "New survivor policy has no confirmed business benefit in source status",
+    "Comparison controller state is a record, not a live process check",
+    "Future causality, full external comparison and generalization remain unresolved"
+  ]
+}

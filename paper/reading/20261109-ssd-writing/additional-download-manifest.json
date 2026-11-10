@@ -1,0 +1,25 @@
+[
+  {
+    "id": "jsa2011-energy",
+    "url": "https://www.cse.psu.edu/~buu1/papers/ps/park-jsa11.pdf",
+    "exit_code": 0,
+    "error": "",
+    "ok": true,
+    "sha256": "0aed36a25a62d43696f8e2358510a7de3b167bb914323dd0d7b31bae769c95be",
+    "bytes": 1273680
+  },
+  {
+    "id": "todaes2026-sweep",
+    "url": "https://dl.acm.org/doi/pdf/10.1145/3795519",
+    "exit_code": 22,
+    "error": "curl: (22) The requested URL returned error: 403",
+    "ok": false
+  },
+  {
+    "id": "ics2026-coldmap",
+    "url": "https://dl.acm.org/doi/pdf/10.1145/3797905.3807851",
+    "exit_code": 22,
+    "error": "curl: (22) The requested URL returned error: 403",
+    "ok": false
+  }
+]

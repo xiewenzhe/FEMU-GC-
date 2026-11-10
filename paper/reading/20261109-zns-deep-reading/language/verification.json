@@ -1,0 +1,16 @@
+{
+  "date": "2026-11-09",
+  "status": "passed",
+  "checks": {
+    "verified_anchor_ids": 29,
+    "local_markdown_links": 31,
+    "unchanged_overleaf_files": 27,
+    "source_pdfs": 5
+  },
+  "not_verified_by_script": [
+    "semantic judgments",
+    "journal-specific language policy",
+    "manuscript claims or experiment results"
+  ],
+  "compile_and_experiments": "not run; reading and documentation only"
+}

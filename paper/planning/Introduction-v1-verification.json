@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-09",
+  "status": "static_checks_passed",
+  "intro_approximate_word_count": 792,
+  "intro_body_paragraphs": 7,
+  "contribution_items": 3,
+  "citation_keys": [
+    "bjorling2021zns",
+    "byeon2026coldmap",
+    "lee2022caza",
+    "li2025finerr",
+    "shen2025oaza"
+  ],
+  "bibtex_structural_entries": {
+    "bjorling2021zns": {
+      "type": "inproceedings",
+      "fields": [
+        "author",
+        "booktitle",
+        "pages",
+        "publisher",
+        "title",
+        "url",
+        "year"
+      ]
+    },
+    "lee2022caza": {
+      "type": "inproceedings",
+      "fields": [
+        "author",
+        "booktitle",
+        "doi",
+        "pages",
+        "publisher",
+        "title",
+        "year"
+      ]
+    },
+    "shen2025oaza": {
+      "type": "article",
+      "fields": [
+        "author",
+        "doi",
+        "journal",
+        "number",
+        "pages",
+        "title",
+        "volume",
+        "year"
+      ]
+    },
+    "byeon2026coldmap": {
+      "type": "inproceedings",
+      "fields": [
+        "author",
+        "booktitle",
+        "doi",
+        "pages",
+        "publisher",
+        "title",
+        "year"
+      ]
+    },
+    "li2025finerr": {
+      "type": "inproceedings",
+      "fields": [
+        "author",
+        "booktitle",
+        "doi",
+        "pages",
+        "title",
+        "url",
+        "year"
+      ]
+    }
+  },
+  "changed_overleaf_files": [
+    "paper/overleaf/main.tex",
+    "paper/overleaf/references.bib"
+  ],
+  "other_overleaf_files_unchanged": 25,
+  "outside_introduction_changes": "bibliography activation only",
+  "source_pdf_sha256": {
+    "paper/reading/20261109-ssd-writing/sources/atc2021-zns.pdf": "a57506fb377c18a77afbfdffea1d33dd2447194f8f094b698b8ef0634a65cc0f",
+    "research/rrzc/baselines/materials/caza-hotstorage2022.pdf": "2e921198195f231045ce1889a76a5a375d5215b01bf68395deb0fdc400ae5306",
+    "research/rrzc/baselines/materials/oaza-gc.pdf": "4875225654998cb28c740472015bcf1904600a57012b9094490730e97cc35cfd",
+    "research/rrzc/baselines/materials/ColdMap_Compaction_Aware_Cost_Benefit_Zone_Cleaning_for_ZNS-Based_Key-Value_Stores.pdf": "b1114dcabaf213b39ded8e711736e85148e31d5e7095817d2682b2f25a550b46",
+    "paper/reading/20261109-ssd-writing/sources/dac2025-finerr-zns.pdf": "a8f9435165b43b1d7e5a21c72548e433e69dab275b179c726e82a456e7332f06"
+  },
+  "upload_archive": "paper/exports/introduction-v1-20261109.zip",
+  "archive_sha256": "b0acbbe34f3f44afd46775d0302af84ee8c79d7aaa7f7fbbbda9e3c4310a4c99",
+  "validation": [
+    "LaTeX braces and environments",
+    "citation and BibTeX key equality",
+    "BibTeX balanced entries and required fields",
+    "local source links",
+    "restricted manuscript edit scope",
+    "ZIP integrity and byte equality"
+  ],
+  "not_performed": [
+    "LaTeX or BibTeX compilation: no local compiler detected",
+    "remote Overleaf update or compilation",
+    "new experiments or original archive re-audit"
+  ]
+}

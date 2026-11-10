@@ -1,0 +1,61 @@
+[
+  {
+    "id": "jsa2025-uscope",
+    "url": "https://zhangbuzhang.github.io/papers/JSA25.pdf",
+    "ok": true,
+    "exit_code": 0,
+    "error": "",
+    "bytes": 3568295,
+    "sha256": "99cc93eafcd03865a9ef3db32617d418b8d1402b6c343ed88bd22473351ef2cc"
+  },
+  {
+    "id": "jsa2020-adapt",
+    "url": "https://www.cs.uni.edu/~diesburg/misc/jsa2020.pdf",
+    "ok": false,
+    "exit_code": 35,
+    "error": "curl: (35) error:0A000126:SSL routines::unexpected eof while reading",
+    "bytes": 0
+  },
+  {
+    "id": "jsa2011-energy",
+    "url": "https://csrms.kaist.ac.kr/files/thesis/fc8e21e64869dc382b66c8fca4253bfa.pdf",
+    "ok": false,
+    "exit_code": 0,
+    "error": "",
+    "bytes": 17860
+  },
+  {
+    "id": "dac2025-finerr-zns",
+    "url": "https://jiemingyin.github.io/docs/DAC2025.pdf",
+    "ok": false,
+    "exit_code": 35,
+    "error": "curl: (35) error:0A000126:SSL routines::unexpected eof while reading",
+    "bytes": 0
+  },
+  {
+    "id": "atc2021-zns",
+    "url": "https://www.usenix.org/system/files/atc21-bjorling.pdf",
+    "ok": true,
+    "exit_code": 0,
+    "error": "",
+    "bytes": 506604,
+    "sha256": "a57506fb377c18a77afbfdffea1d33dd2447194f8f094b698b8ef0634a65cc0f"
+  },
+  {
+    "id": "fast2019-reliability",
+    "url": "https://www.usenix.org/system/files/fast19-kim-bryan.pdf",
+    "ok": true,
+    "exit_code": 0,
+    "error": "",
+    "bytes": 2272114,
+    "sha256": "e94fbde532838c48be0c3f0f480252bc37d4cb78d692aab9466a3f20269a2811"
+  },
+  {
+    "id": "msst2024-caza",
+    "url": "https://www.msstconference.org/MSST-history/2024/Papers/msst24-9.2.pdf",
+    "ok": false,
+    "exit_code": 35,
+    "error": "curl: (35) error:0A000126:SSL routines::unexpected eof while reading",
+    "bytes": 0
+  }
+]

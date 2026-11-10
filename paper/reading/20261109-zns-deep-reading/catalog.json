@@ -1,0 +1,111 @@
+{
+  "date": "2026-11-09",
+  "method": "Whole supplied PDFs read before logic reconstruction; selected formula and figure pages visually checked; no reproduction.",
+  "supplementary": "No separate supplementary supplied or independently retrieved; publisher supplementary existence not established.",
+  "papers": [
+    {
+      "id": "coldmap-ics2026",
+      "title": "ColdMap: Compaction-Aware Cost-Benefit Zone Cleaning for ZNS-Based Key-Value Stores",
+      "venue_and_version": "ICS",
+      "year": "2026",
+      "doi": "10.1145/3797905.3807851",
+      "file_relative_to_repository_root": "research/rrzc/baselines/materials/ColdMap_Compaction_Aware_Cost_Benefit_Zone_Cleaning_for_ZNS-Based_Key-Value_Stores.pdf",
+      "origin": "user-provided local fulltext; existing source inventory",
+      "bytes": 1417497,
+      "sha256": "b1114dcabaf213b39ded8e711736e85148e31d5e7095817d2682b2f25a550b46",
+      "pdf_pages": 14,
+      "reading_scope": {
+        "body": "all pages",
+        "figures_tables_captions": "read; selected originals visually inspected",
+        "references_pages": "read, cited works not individually verified",
+        "appendix": "no separately labeled appendix within supplied PDF"
+      },
+      "page_text_characters": [
+        4671,
+        6892,
+        6367,
+        6268,
+        5807,
+        5918,
+        6527,
+        6366,
+        5165,
+        5636,
+        5761,
+        6940,
+        10360,
+        475
+      ]
+    },
+    {
+      "id": "oaza-taco2025",
+      "title": "Overlapping Aware Data Placement Optimizations for LSM Tree-Based Store on ZNS SSDs",
+      "venue_and_version": "TACO 22(2), Article 57",
+      "year": "2025",
+      "doi": "10.1145/3721287",
+      "file_relative_to_repository_root": "research/rrzc/baselines/materials/oaza-gc.pdf",
+      "origin": "user-provided local fulltext; journal extension of ASP-DAC 2024",
+      "bytes": 3010711,
+      "sha256": "4875225654998cb28c740472015bcf1904600a57012b9094490730e97cc35cfd",
+      "pdf_pages": 25,
+      "reading_scope": {
+        "body": "all pages",
+        "figures_tables_captions": "read; selected originals visually inspected",
+        "references_pages": "read, cited works not individually verified",
+        "appendix": "no separately labeled appendix within supplied PDF"
+      },
+      "page_text_characters": [
+        4336,
+        4352,
+        3860,
+        2856,
+        3239,
+        3221,
+        1850,
+        2288,
+        2796,
+        2444,
+        3467,
+        2515,
+        3397,
+        3822,
+        3290,
+        2961,
+        3449,
+        1616,
+        4355,
+        586,
+        4225,
+        449,
+        3293,
+        5401,
+        5259
+      ]
+    },
+    {
+      "id": "zarc-damon2026",
+      "title": "ZARC: Re-inventing Zone Allocation for LSMs on ZNS SSD",
+      "venue_and_version": "DaMoN workshop; early-stage vision paper",
+      "year": "2026",
+      "doi": "10.1145/3789237.3809132",
+      "file_relative_to_repository_root": "paper/reading/20261109-zns-deep-reading/sources/zarc-damon2026.pdf",
+      "origin": "https://subhadeep.net/assets/fulltext/ZARC_Re-inventing_Zone_Allocation_for_LSMs_on_ZNS_SSD.pdf",
+      "bytes": 977534,
+      "sha256": "9df87a44d4a33b84c64df8ef472c4a7e9ace3e335833bc4d651a3f1b4d8dd014",
+      "pdf_pages": 5,
+      "reading_scope": {
+        "body": "all pages",
+        "figures_tables_captions": "read; selected originals visually inspected",
+        "references_pages": "read, cited works not individually verified",
+        "appendix": "no separately labeled appendix within supplied PDF"
+      },
+      "page_text_characters": [
+        5461,
+        6558,
+        6615,
+        4989,
+        7180
+      ]
+    }
+  ]
+}

@@ -1,0 +1,334 @@
+{
+  "date": "2026-11-09",
+  "normalization": "NFKC, soft-hyphen removal, PDF line-wrap hyphen joining, whitespace folding, apostrophe normalization",
+  "sources": {
+    "coldmap": {
+      "file_relative_to_repository_root": "research/rrzc/baselines/materials/ColdMap_Compaction_Aware_Cost_Benefit_Zone_Cleaning_for_ZNS-Based_Key-Value_Stores.pdf",
+      "sha256": "b1114dcabaf213b39ded8e711736e85148e31d5e7095817d2682b2f25a550b46",
+      "pdf_pages": 14
+    },
+    "oaza": {
+      "file_relative_to_repository_root": "research/rrzc/baselines/materials/oaza-gc.pdf",
+      "sha256": "4875225654998cb28c740472015bcf1904600a57012b9094490730e97cc35cfd",
+      "pdf_pages": 25
+    },
+    "uscope": {
+      "file_relative_to_repository_root": "paper/reading/20261109-ssd-writing/sources/jsa2025-uscope.pdf",
+      "sha256": "99cc93eafcd03865a9ef3db32617d418b8d1402b6c343ed88bd22473351ef2cc",
+      "pdf_pages": 15
+    },
+    "adapt": {
+      "file_relative_to_repository_root": "paper/reading/20261109-ssd-writing/sources/jsa2020-adapt.pdf",
+      "sha256": "2f28c25d21260434659603ff5aad4f7883ae25c20bbce8cc5dc25f12462ac8ad",
+      "pdf_pages": 12
+    },
+    "zns": {
+      "file_relative_to_repository_root": "paper/reading/20261109-ssd-writing/sources/atc2021-zns.pdf",
+      "sha256": "a57506fb377c18a77afbfdffea1d33dd2447194f8f094b698b8ef0634a65cc0f",
+      "pdf_pages": 16
+    }
+  },
+  "anchors": [
+    {
+      "id": "C01",
+      "analysis_heading": "让步句先承认直觉，再收窄困难",
+      "source": "coldmap",
+      "pdf_page": 2,
+      "normalized_text_offset": 122,
+      "excerpt_characters": 90,
+      "excerpt_sha256": "829a3c77d4d06aab8d85d36153c749cee2feb9064f87a55b4d9de515730b4715"
+    },
+    {
+      "id": "C02",
+      "analysis_heading": "because给出选择器看不见什么",
+      "source": "coldmap",
+      "pdf_page": 2,
+      "normalized_text_offset": 2635,
+      "excerpt_characters": 118,
+      "excerpt_sha256": "aa24f1df3ac4dd9503dc991b0931648a359140dd116b40303cd3c42ec088d196"
+    },
+    {
+      "id": "C03",
+      "analysis_heading": "aims to把目标与达成分开",
+      "source": "coldmap",
+      "pdf_page": 6,
+      "normalized_text_offset": 1839,
+      "excerpt_characters": 163,
+      "excerpt_sha256": "c1869164380b9c85befac72c56a73003069e45bae36a2946ad3ab4e03241481c"
+    },
+    {
+      "id": "C04",
+      "analysis_heading": "approximate主动暴露近似，而不把它藏进名词",
+      "source": "coldmap",
+      "pdf_page": 6,
+      "normalized_text_offset": 4208,
+      "excerpt_characters": 109,
+      "excerpt_sha256": "5be846720af48bec25f13dd500235df4f6410274a2fc52822eabcefd66ce1184"
+    },
+    {
+      "id": "C05",
+      "analysis_heading": "旧信息做主语，新信息留给下一步",
+      "source": "coldmap",
+      "pdf_page": 6,
+      "normalized_text_offset": 5304,
+      "excerpt_characters": 61,
+      "excerpt_sha256": "77c3a1b0896d4a85c4dbac27852d9ad9a4449746fec74b23918884682262f251"
+    },
+    {
+      "id": "C06",
+      "analysis_heading": "小/大参数不是好/坏标签，而是不同失败方式",
+      "source": "coldmap",
+      "pdf_page": 7,
+      "normalized_text_offset": 676,
+      "excerpt_characters": 32,
+      "excerpt_sha256": "f6d20e09b94d44055562012045f6d3e613364cf5dbb6463f519dad30366a688c"
+    },
+    {
+      "id": "C07",
+      "analysis_heading": "结果段可以直接承认增益有限",
+      "source": "coldmap",
+      "pdf_page": 10,
+      "normalized_text_offset": 1101,
+      "excerpt_characters": 89,
+      "excerpt_sha256": "289ce4f24546307642ef9ba0f6012f499e2a0927f5175cd1452337db05ac9d1f"
+    },
+    {
+      "id": "C08",
+      "analysis_heading": "comparable不是“改善”，也未必是等价检验",
+      "source": "coldmap",
+      "pdf_page": 10,
+      "normalized_text_offset": 1884,
+      "excerpt_characters": 27,
+      "excerpt_sha256": "0334876f685deb0f80089000a2d2ddd1ebad51f2e4ed235db9dd2311fec258eb"
+    },
+    {
+      "id": "C09",
+      "analysis_heading": "confirm是否越过了图的证据",
+      "source": "coldmap",
+      "pdf_page": 10,
+      "normalized_text_offset": 4079,
+      "excerpt_characters": 71,
+      "excerpt_sha256": "84f1edfc25ec163240de6e43404674a5abde71c792c6db8d66c125bfbf2f0e2e"
+    },
+    {
+      "id": "C10",
+      "analysis_heading": "modified / extended说明借用了什么、改变了什么",
+      "source": "coldmap",
+      "pdf_page": 10,
+      "normalized_text_offset": 4474,
+      "excerpt_characters": 41,
+      "excerpt_sha256": "cbda5f3a721cbb2394847e58827ce36a29e74f392029f409e88eaa22024234d3"
+    },
+    {
+      "id": "C11",
+      "analysis_heading": "assuming标出估算的前提",
+      "source": "coldmap",
+      "pdf_page": 11,
+      "normalized_text_offset": 1700,
+      "excerpt_characters": 42,
+      "excerpt_sha256": "b6476cde0449412d7dda852f0a037049d9b3d0b5a3894a2458d56ec429be2843"
+    },
+    {
+      "id": "C12",
+      "analysis_heading": "结论中的绝对动词不能反向替正文补证据",
+      "source": "coldmap",
+      "pdf_page": 12,
+      "normalized_text_offset": 3894,
+      "excerpt_characters": 63,
+      "excerpt_sha256": "57b92f0e7a53bf111d4d9cfdce2b55f37ad413caa4e8b387bafd86efa87f7478"
+    },
+    {
+      "id": "O01",
+      "analysis_heading": "To tackle说明目的，被动句提出方案",
+      "source": "oaza",
+      "pdf_page": 8,
+      "normalized_text_offset": 1117,
+      "excerpt_characters": 102,
+      "excerpt_sha256": "ee81618587b585953040d14ab51c55e7bdcbc8badd2305af43b910cc02bde827"
+    },
+    {
+      "id": "O02",
+      "analysis_heading": "denote / represent是在定义，不是在证明",
+      "source": "oaza",
+      "pdf_page": 12,
+      "normalized_text_offset": 493,
+      "excerpt_characters": 40,
+      "excerpt_sha256": "7224c631a581543552e6728f2e431c8f79d5b206eed302996d081e473bc8f8c9"
+    },
+    {
+      "id": "O03",
+      "analysis_heading": "empirically set保留了参数来源",
+      "source": "oaza",
+      "pdf_page": 11,
+      "normalized_text_offset": 3174,
+      "excerpt_characters": 39,
+      "excerpt_sha256": "9c47b4e29b64de2b2eefd369873faa0c8033ca05c60535cf9ca813b67c9a04f3"
+    },
+    {
+      "id": "O04",
+      "analysis_heading": "meticulously不是可验证的方法性质",
+      "source": "oaza",
+      "pdf_page": 11,
+      "normalized_text_offset": 2435,
+      "excerpt_characters": 40,
+      "excerpt_sha256": "30b4713e882f899b06030ad9c416b6b2a9c003dca368484f8837576ab2872e98"
+    },
+    {
+      "id": "O05",
+      "analysis_heading": "让步词能呈现反直觉，但不负责证明",
+      "source": "oaza",
+      "pdf_page": 13,
+      "normalized_text_offset": 2037,
+      "excerpt_characters": 37,
+      "excerpt_sha256": "7fec4590e2378438914fc96dd90deb49baedb38e292e08349769b9f4b3742c54"
+    },
+    {
+      "id": "O06",
+      "analysis_heading": "often不是概率结果，in practice不是测量来源",
+      "source": "oaza",
+      "pdf_page": 13,
+      "normalized_text_offset": 2515,
+      "excerpt_characters": 54,
+      "excerpt_sha256": "2d51bdb6030b13bfd1e20053e2b6f082806609af0afcb71a940d2cd289f1e761"
+    },
+    {
+      "id": "O07",
+      "analysis_heading": "can be simplified只在假设下成立",
+      "source": "oaza",
+      "pdf_page": 14,
+      "normalized_text_offset": 1068,
+      "excerpt_characters": 26,
+      "excerpt_sha256": "d01fcf7e2abafb15e0a7d000b7427480a909efa7823d40ca85e7761f3a546942"
+    },
+    {
+      "id": "O08",
+      "analysis_heading": "using把比较条件放进结果句",
+      "source": "oaza",
+      "pdf_page": 16,
+      "normalized_text_offset": 1425,
+      "excerpt_characters": 26,
+      "excerpt_sha256": "20644fcdc06b52e796ed89f1dffa4e2d7b0e79f8ba947dc8bb9f778d1b0aa37e"
+    },
+    {
+      "id": "O09",
+      "analysis_heading": "respectively压缩比较，但必须能一一配对",
+      "source": "oaza",
+      "pdf_page": 17,
+      "normalized_text_offset": 392,
+      "excerpt_characters": 53,
+      "excerpt_sha256": "52448b1f602e89fa6d88e514722d2ea7505cad5409660b4b396deb01106d4f66"
+    },
+    {
+      "id": "O10",
+      "analysis_heading": "attribute to是归因动作，不是测量结果",
+      "source": "oaza",
+      "pdf_page": 17,
+      "normalized_text_offset": 2899,
+      "excerpt_characters": 34,
+      "excerpt_sha256": "cebd55219c31a89664c73653c66a2bf02432266cd982ed51f5088bf76bd9a067"
+    },
+    {
+      "id": "O11",
+      "analysis_heading": "suggests也需要检查它推出了哪种稳定性",
+      "source": "oaza",
+      "pdf_page": 19,
+      "normalized_text_offset": 117,
+      "excerpt_characters": 62,
+      "excerpt_sha256": "7252dd7161b0a17158099ac9a36ae4e374c4151738025247dcde1be1a9af2b36"
+    },
+    {
+      "id": "O12",
+      "analysis_heading": "enhanced to与reduced by给出不同的数值关系",
+      "source": "oaza",
+      "pdf_page": 19,
+      "normalized_text_offset": 1805,
+      "excerpt_characters": 42,
+      "excerpt_sha256": "a7bcfbe0263b9cfbfdcb0930c9e57bc70272fffcca16c51d1869dd474b78ee77"
+    },
+    {
+      "id": "J01",
+      "source": "uscope",
+      "positions": [
+        {
+          "pdf_page": 7,
+          "normalized_text_offset": 4033,
+          "excerpt_characters": 8,
+          "excerpt_sha256": "41d76f52c9f478a7c4e04f2dda4fe58ae438ee636c8c33b23cd3c4ec56e3df27"
+        },
+        {
+          "pdf_page": 8,
+          "normalized_text_offset": 755,
+          "excerpt_characters": 11,
+          "excerpt_sha256": "99388c834af4739227f4a7b047643f239bf9f1c5bef340a89cd168377fd98416"
+        },
+        {
+          "pdf_page": 8,
+          "normalized_text_offset": 984,
+          "excerpt_characters": 8,
+          "excerpt_sha256": "8b4c1968b133eeb05682f2c96f7baab6edde79174e50772fb63a8f3b2d66d253"
+        }
+      ]
+    },
+    {
+      "id": "J02",
+      "source": "uscope",
+      "positions": [
+        {
+          "pdf_page": 2,
+          "normalized_text_offset": 2395,
+          "excerpt_characters": 11,
+          "excerpt_sha256": "69747c10978000fb70c5858ce3ac829b7a4055c04fa561ce217b00bb29fab221"
+        }
+      ]
+    },
+    {
+      "id": "J03",
+      "source": "uscope",
+      "positions": [
+        {
+          "pdf_page": 5,
+          "normalized_text_offset": 6305,
+          "excerpt_characters": 11,
+          "excerpt_sha256": "fb81d35666f86ee942a125f224396b17d40ad97517fa75589287f006979e7c9c"
+        }
+      ]
+    },
+    {
+      "id": "A01",
+      "source": "adapt",
+      "positions": [
+        {
+          "pdf_page": 9,
+          "normalized_text_offset": 1515,
+          "excerpt_characters": 8,
+          "excerpt_sha256": "1e8c35c1e8fb46d1cb0e53efffd0705b31e5527cbaaa748771a8a2f0a55bc8a2"
+        },
+        {
+          "pdf_page": 9,
+          "normalized_text_offset": 1558,
+          "excerpt_characters": 21,
+          "excerpt_sha256": "bd2a484c781f33fa5836be103c4602fd96d1546202492593c010e8e0446ae7ce"
+        },
+        {
+          "pdf_page": 9,
+          "normalized_text_offset": 1612,
+          "excerpt_characters": 25,
+          "excerpt_sha256": "b6efece27a7c2a069103f0abd38ea1dd0c433da82519b2fb77a98d774d0c7f55"
+        }
+      ]
+    },
+    {
+      "id": "Z01",
+      "source": "zns",
+      "positions": [
+        {
+          "pdf_page": 2,
+          "normalized_text_offset": 983,
+          "excerpt_characters": 59,
+          "excerpt_sha256": "9573f217decd227ebea1220446d588e84798c0bf45211e2a0ece48909e09543c"
+        }
+      ]
+    }
+  ],
+  "scope": "24 C/O passages plus 5 comparison anchors; representative language close reading, not sentence-by-sentence review of every paper"
+}

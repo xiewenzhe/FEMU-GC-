@@ -1,0 +1,11 @@
+# Independent Overleaf Git repository; do not add it to the FEMU parent repository.
+/overleaf/
+# Local backups and downloaded source papers are not project source files.
+/archive/
+/reading/*/sources/
+# Keep the writing plan, evidence indexes, and original reading notes in Git.
+!README.md
+!planning/*.md
+!reading/*/*.md
+!reading/*/notes/*.md
+!reading/*/language/*.md
